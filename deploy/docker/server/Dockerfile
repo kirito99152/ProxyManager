@@ -1,30 +1,24 @@
-# Build stage
-FROM golang:1.22-alpine AS builder
-
+# Stage 1: Build the Go Server
+FROM golang:1.22-alpine AS go-builder
 WORKDIR /app
-
-# Install dependencies
-COPY go.mod ./
-# COPY go.sum ./
+COPY go.mod go.sum ./
 RUN go mod download
-
-# Copy source code
 COPY . .
-
-# Build the server
 RUN CGO_ENABLED=0 GOOS=linux go build -o /server cmd/server/main.go
 
-# Final stage
+# Stage 2: Build the Dashboard (Vite)
+FROM node:20-alpine AS dashboard-builder
+WORKDIR /app
+COPY dashboard/package.json dashboard/package-lock.json ./
+RUN npm install
+COPY dashboard/ .
+RUN npm run build
+
+# Stage 3: Final Image
 FROM alpine:latest
-
 WORKDIR /
-
-COPY --from=builder /server /server
+COPY --from=go-builder /server /server
+COPY --from=dashboard-builder /app/dist /dashboard/dist
 COPY configs/frps.yaml /configs/frps.yaml
-
-# Install FRP (optional, or run as a separate container)
-# For this setup, we will run FRPS in a separate container for better management
-
 EXPOSE 8080 8443
-
 ENTRYPOINT ["/server"]

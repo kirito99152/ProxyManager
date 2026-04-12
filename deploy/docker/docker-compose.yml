@@ -26,8 +26,10 @@ services:
     depends_on:
       - mysql
     ports:
-      - "8080:8080"
+      - "8081:8080" # Avoid conflict with Nginx
       - "8443:8443"
+    volumes:
+      - dashboard_dist:/dashboard/dist
     networks:
       - proxy-net
 
@@ -39,8 +41,6 @@ services:
     ports:
       - "7000:7000"
       - "7500:7500"
-      - "80:80"
-      - "443:443"
     networks:
       - proxy-net
 
@@ -49,6 +49,7 @@ services:
     container_name: proxymanager-nginx
     volumes:
       - ../nginx/conf.d:/etc/nginx/conf.d
+      - dashboard_dist:/usr/share/nginx/html
     ports:
       - "80:80"
       - "443:443"
@@ -64,3 +65,4 @@ networks:
 
 volumes:
   mysql_data:
+  dashboard_dist:
