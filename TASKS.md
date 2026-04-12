@@ -1,31 +1,36 @@
-# Project: ProxyManager - Milestone #2: Modern Dashboard & Real-time Monitoring
+# Project: ProxyManager - Milestone #3: Security, Multi-user & User Experience
 
 Chào các Agent #2, #3, #4. Tôi là **Agent #1 (Lead Architect)**. 
 
 ---
 
-### 🏆 TRẠNG THÁI MILESTONE #2: GẦN HOÀN TẤT (NEAR COMPLETION)
-
-Tôi rất ấn tượng với tốc độ của các ông. Toàn bộ kiến trúc "Real-time Pipeline" đã được hình thành:
-- **Agent #3:** ✅ Heartbeat mang theo dữ liệu Traffic (net_in/out).
-- **Agent #2:** ✅ Đã có WebSocket Server + Database logging.
-- **Agent #4:** ✅ Đã có Giao diện Dark Mode chuẩn Dribbble với biểu đồ Recharts.
+### 🏆 TRẠNG THÁI DỰ ÁN: MILESTONE #2 HOÀN TẤT
+Chúng ta đã có một Dashboard tuyệt đẹp với biểu đồ Real-time (Traffic, CPU, RAM) và WebSocket mượt mà. Cảm ơn Agent #4 đã nỗ lực "thay máu" UI.
 
 ---
 
-### 🛠️ TINH CHỈNH CUỐI CÙNG (Architecture Polishing)
+### 🛡️ MILESTONE #3: SECURITY & ADVANCED FEATURES (Nhiệm vụ mới)
 
-**Gửi Agent #2 & #4:** 
-- "Hãy kiểm tra xem khi Agent offline, Dashboard có hiển thị trạng thái 'Disconnected' ngay lập tức qua WebSocket không? Chúng ta cần đảm bảo tính nhất quán giữa trạng thái trong DB và trạng thái hiển thị."
+Hệ thống hiện tại đang để trống cửa (No Auth). Chúng ta cần biến nó thành một sản phẩm thương mại có thể dùng cho nhiều người.
 
-**Gửi Agent #3:**
-- "Dữ liệu `net_in/out` hiện tại là số cộng dồn hay số tức thời (speed)? Hãy đảm bảo Agent #4 hiểu đúng đơn vị để hiển thị biểu đồ tốc độ mạng chính xác."
+#### 1. Agent #2 (Backend):
+- [ ] Triển khai **JWT Authentication** cho Dashboard API.
+- [ ] Xây dựng hệ thống quản lý User (Register/Login).
+- [ ] Middleware phân quyền: Chỉ Admin mới được cấu hình Proxy.
+
+#### 2. Agent #3 (Client Agent):
+- [ ] Thêm tính năng **Auto-update**: Agent tự động kiểm tra phiên bản mới từ Server.
+- [ ] Module **Log Scanner**: Quét và gửi các log hệ thống quan trọng lên Server để hiển thị trên Dashboard.
+
+#### 3. Agent #4 (Frontend/DevOps):
+- [ ] Thiết kế trang **Login & Profile**.
+- [ ] Tích hợp JWT Token vào các yêu cầu API và WebSocket.
+- [ ] Tối ưu hóa Docker: Tách Nginx thành một container riêng biệt phục vụ cả Frontend và Backend (Reverse Proxy).
 
 ---
 
-### 🚀 TIẾN TỚI TEST CHUNG (Integration Test)
-User sẽ tiến hành chạy thử nghiệm toàn bộ hệ thống trên Server IP **10.0.3.98**.
-- Dashboard URL: `http://10.0.3.98:3000` (hoặc port Nginx cấu hình).
-- WebSocket: `ws://10.0.3.98:50051/ws` (hoặc endpoint tương ứng).
+### 🧪 CHIẾN LƯỢC TEST
+- Kiểm tra tính bảo mật của JWT (Token hết hạn, Refresh token).
+- Kiểm tra khả năng chịu tải của gRPC khi số lượng Agent tăng lên >100.
 
-**Cả đội hãy sẵn sàng cho Milestone #3: Security & Multi-user!**
+**Cả đội hãy bắt đầu đi! Tôi sẽ quay lại script theo dõi Git sau 15s.**
