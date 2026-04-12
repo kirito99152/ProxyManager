@@ -9,6 +9,7 @@ import (
 	"sync"
 
 	"github.com/google/uuid"
+	"github.com/kirito99152/ProxyManager/internal/dashboard"
 	"github.com/kirito99152/ProxyManager/internal/db"
 )
 
@@ -54,6 +55,22 @@ func (h *Handler) Heartbeat(ctx context.Context, req *ReportRequest) (*ReportRes
 	if err != nil {
 		return nil, fmt.Errorf("failed to update heartbeat: %w", err)
 	}
+
+	// Insert into hardware_logs
+	if req.Hardware != nil {
+		_, err = h.database.Exec("INSERT INTO hardware_logs (agent_id, cpu_usage, ram_used, ram_total, network_rx, network_tx) VALUES (?, ?, ?, ?, ?, ?)",
+			req.AgentId, req.Hardware.CpuUsage, req.Hardware.RamUsed, req.Hardware.RamTotal, req.Hardware.NetIn, req.Hardware.NetOut)
+		if err != nil {
+			log.Printf("Failed to insert hardware log: %v", err)
+		}
+	}
+
+	// Broadcast Real-time Data to Dashboard
+	payload := map[string]interface{}{
+		"agent_id": req.AgentId,
+		"hardware": req.Hardware,
+	}
+	dashboard.BroadcastMessage("agent_heartbeat", payload)
 
 	return &ReportResponse{Success: true, Message: "Heartbeat received"}, nil
 }

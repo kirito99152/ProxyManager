@@ -39,3 +39,16 @@ CREATE TABLE IF NOT EXISTS activity_logs (
     details TEXT,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 ) ENGINE=InnoDB;
+
+-- Bảng lưu lịch sử hardware stats (CPU/RAM/Network) cho vẽ biểu đồ
+CREATE TABLE IF NOT EXISTS hardware_logs (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    agent_id VARCHAR(36) NOT NULL,
+    cpu_usage DOUBLE,
+    ram_used BIGINT,
+    ram_total BIGINT,
+    network_rx BIGINT, -- Byte received
+    network_tx BIGINT, -- Byte transmitted
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (agent_id) REFERENCES agents(id) ON DELETE CASCADE
+) ENGINE=InnoDB;

@@ -26,6 +26,9 @@ func main() {
 		log.Fatalf("Failed to initialize database: %v", err)
 	}
 
+	// Start WebSocket Hub
+	go dashboard.Hub.Run()
+
 	// Start gRPC Server in a goroutine
 	go startGRPCServer(database)
 

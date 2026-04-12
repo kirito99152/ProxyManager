@@ -134,6 +134,36 @@ func (h *DashboardHandler) UpdateFrpsConfig(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"message": "Config updated and service reloaded"})
 }
 
+// --- Statistics Handlers (Milestone 2) ---
+
+func (h *DashboardHandler) GetHardwareHistory(c *gin.Context) {
+	agentID := c.Param("id")
+	var history []models.HardwareLog
+	// Fetch last 60 minutes of hardware stats
+	err := h.database.Select(&history, "SELECT * FROM hardware_logs WHERE agent_id = ? ORDER BY created_at DESC LIMIT 60", agentID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to fetch hardware history"})
+		return
+	}
+	c.JSON(http.StatusOK, history)
+}
+
+func (h *DashboardHandler) GetTotalTraffic(c *gin.Context) {
+	// Parse from FRPS log logic (simplified for Milestone 2, normally read /var/log/frps.log or FRP metrics dashboard)
+	// Alternatively, query the local hardware logs for network rx/tx sum
+	var totalRX, totalTX uint64
+	err := h.database.QueryRow("SELECT COALESCE(SUM(network_rx), 0), COALESCE(SUM(network_tx), 0) FROM hardware_logs").Scan(&totalRX, &totalTX)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to calculate total traffic"})
+		return
+	}
+	
+	c.JSON(http.StatusOK, gin.H{
+		"total_rx": totalRX,
+		"total_tx": totalTX,
+	})
+}
+
 // --- Install Script Handler ---
 
 func (h *DashboardHandler) GetInstallScript(c *gin.Context) {

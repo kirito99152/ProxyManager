@@ -38,3 +38,16 @@ type ActivityLog struct {
 	Details   string    `db:"details" json:"details"`
 	CreatedAt time.Time `db:"created_at" json:"created_at"`
 }
+
+// HardwareLog represents historical hardware stats for charts.
+type HardwareLog struct {
+	ID        int       `db:"id" json:"id"`
+	AgentID   string    `db:"agent_id" json:"agent_id"`
+	CPUUsage  float64   `db:"cpu_usage" json:"cpu_usage"`
+	RAMUsed   uint64    `db:"ram_used" json:"ram_used"`
+	RAMTotal  uint64    `db:"ram_total" json:"ram_total"`
+	NetworkRX uint64    `db:"network_rx" json:"network_rx"`
+	NetworkTX uint64    `db:"network_tx" json:"network_tx"`
+	CreatedAt time.Time `db:"created_at" json:"created_at"`
+}
+
