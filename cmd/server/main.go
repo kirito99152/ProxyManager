@@ -29,6 +29,9 @@ func main() {
 	// Start WebSocket Hub
 	go dashboard.Hub.Run()
 
+	// Start Offline Agent Monitor
+	go dashboard.StartAgentMonitor(database)
+
 	// Start gRPC Server in a goroutine
 	go startGRPCServer(database)
 
