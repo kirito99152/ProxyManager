@@ -1,7 +1,7 @@
 syntax = "proto3";
 package api;
 
-option go_package = "github.com/youruser/proxymanager/internal/api";
+option go_package = "github.com/kirito99152/ProxyManager/internal/api";
 
 service AgentService {
   // Agent đăng ký với Server khi khởi chạy lần đầu
