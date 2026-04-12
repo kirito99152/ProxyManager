@@ -30,7 +30,9 @@ import {
   FileText,
   Send,
   Users,
-  BellRing
+  BellRing,
+  Menu,
+  X
 } from 'lucide-react';
 import { 
   XAxis, 
@@ -39,7 +41,10 @@ import {
   Tooltip, 
   ResponsiveContainer,
   AreaChart,
-  Area
+  Area,
+  PieChart,
+  Pie,
+  Cell
 } from 'recharts';
 
 // --- Types ---
@@ -437,7 +442,7 @@ const LogsPage: React.FC<{ logs: LogEntry[]; agents: DashboardAgent[] }> = ({ lo
 
   return (
     <div className="animate-in fade-in slide-in-from-bottom-4 duration-500">
-       <div className="flex justify-between items-end mb-8">
+       <div className="flex flex-col md:flex-row md:justify-between md:items-end gap-4 mb-8">
         <div>
           <h1 className="text-3xl font-bold">System Logs</h1>
           <p className="text-gray-400 mt-1">Real-time event stream from all active agents</p>
@@ -445,21 +450,21 @@ const LogsPage: React.FC<{ logs: LogEntry[]; agents: DashboardAgent[] }> = ({ lo
       </div>
 
       <div className="glass rounded-[32px] p-6 border border-white/10 mb-8">
-        <div className="flex flex-wrap gap-4">
-          <div className="flex-1 min-w-[200px] relative">
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+          <div className="md:col-span-1 lg:col-span-2 relative">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500 w-4 h-4" />
             <input 
               type="text" 
               placeholder="Search logs..." 
               value={filter.search}
               onChange={(e) => setFilter({...filter, search: e.target.value})}
-              className="w-full bg-white/5 border border-white/10 rounded-xl py-2 pl-10 pr-4 focus:outline-none focus:border-neon-blue/50 transition-colors"
+              className="w-full bg-white/5 border border-white/10 rounded-xl py-2.5 pl-10 pr-4 focus:outline-none focus:border-neon-blue/50 transition-colors text-sm"
             />
           </div>
           <select 
             value={filter.severity}
             onChange={(e) => setFilter({...filter, severity: e.target.value as any})}
-            className="bg-[#1a1a1c] border border-white/10 rounded-xl py-2 px-4 focus:outline-none focus:border-neon-blue/50 text-gray-300"
+            className="bg-[#1a1a1c] border border-white/10 rounded-xl py-2.5 px-4 focus:outline-none focus:border-neon-blue/50 text-gray-300 text-sm appearance-none cursor-pointer"
           >
             <option value="all">All Severities</option>
             <option value="info">Info</option>
@@ -469,7 +474,7 @@ const LogsPage: React.FC<{ logs: LogEntry[]; agents: DashboardAgent[] }> = ({ lo
           <select 
             value={filter.agent_id}
             onChange={(e) => setFilter({...filter, agent_id: e.target.value})}
-            className="bg-[#1a1a1c] border border-white/10 rounded-xl py-2 px-4 focus:outline-none focus:border-neon-blue/50 text-gray-300"
+            className="bg-[#1a1a1c] border border-white/10 rounded-xl py-2.5 px-4 focus:outline-none focus:border-neon-blue/50 text-gray-300 text-sm appearance-none cursor-pointer"
           >
             <option value="all">All Agents</option>
             {agents.map(a => <option key={a.id} value={a.id}>{a.hostname}</option>)}
@@ -761,6 +766,7 @@ const App: React.FC = () => {
   const [wsConnected, setWsConnected] = useState(false);
   const [totalBandwidth, setTotalBandwidth] = useState("0 B/s");
   const [initialLoading, setInitialLoading] = useState(true);
+  const [isSidebarOpen, setIsSidebarOpen] = useState(false);
 
   const handleLogin = (newToken: string, newUser: User) => {
     setAuthData(newToken, newUser);
@@ -950,18 +956,47 @@ const App: React.FC = () => {
 
   // Calculations for stats cards
   const activeAgents = agents.filter(a => a.status === 'online').length;
+  const offlineAgents = agents.length - activeAgents;
   const totalPorts = agents.reduce((sum, a) => sum + (a.ports?.length || 0), 0);
   const totalTrafficFormatted = formatBytes(trafficStats.total_rx + trafficStats.total_tx);
 
+  // Health Stats
+  const avgCPU = agents.length > 0 ? agents.reduce((sum, a) => sum + (a.hardware?.cpu_usage || 0), 0) / agents.length : 0;
+  const avgRAM = agents.length > 0 ? agents.reduce((sum, a) => sum + (a.hardware ? (a.hardware.ram_used / a.hardware.ram_total) * 100 : 0), 0) / agents.length : 0;
+  const highLoadNodes = agents.filter(a => (a.hardware?.cpu_usage || 0) > 80 || (a.hardware ? (a.hardware.ram_used / a.hardware.ram_total) * 100 : 0) > 80).length;
+  const idleNodes = agents.length - highLoadNodes;
+  const disconnectedNodes = agents.filter(a => a.status !== 'online');
+
+  const distributionData = [
+    { name: 'High Load', value: highLoadNodes, color: '#ff4d4d' },
+    { name: 'Normal/Idle', value: idleNodes, color: '#00f3ff' }
+  ];
+
   return (
     <div className="flex h-screen w-full bg-[#0a0a0c] text-white overflow-hidden font-sans">
+      {/* Mobile Sidebar Overlay */}
+      {isSidebarOpen && (
+        <div 
+          className="fixed inset-0 bg-black/60 backdrop-blur-sm z-40 lg:hidden"
+          onClick={() => setIsSidebarOpen(false)}
+        ></div>
+      )}
+
       {/* Sidebar */}
-      <aside className="w-64 glass border-r border-white/10 flex flex-col">
-        <div className="p-6 flex items-center gap-3">
-          <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-neon-blue to-neon-purple flex items-center justify-center shadow-lg shadow-neon-blue/20">
-            <Shield className="text-white w-6 h-6" />
+      <aside className={`fixed inset-y-0 left-0 w-72 glass border-r border-white/10 flex flex-col z-50 transition-transform duration-300 transform lg:relative lg:translate-x-0 ${isSidebarOpen ? 'translate-x-0' : '-translate-x-full'}`}>
+        <div className="p-6 flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-neon-blue to-neon-purple flex items-center justify-center shadow-lg shadow-neon-blue/20">
+              <Shield className="text-white w-6 h-6" />
+            </div>
+            <span className="font-bold text-xl tracking-tight">ProxyManager</span>
           </div>
-          <span className="font-bold text-xl tracking-tight">ProxyManager</span>
+          <button 
+            className="lg:hidden p-2 text-gray-400 hover:text-white"
+            onClick={() => setIsSidebarOpen(false)}
+          >
+            <X size={20} />
+          </button>
         </div>
 
         <nav className="flex-1 px-4 py-6 space-y-2">
@@ -969,43 +1004,43 @@ const App: React.FC = () => {
             icon={<LayoutDashboard size={20} />} 
             label="Dashboard" 
             active={activeTab === 'dashboard'} 
-            onClick={() => setActiveTab('dashboard')} 
+            onClick={() => { setActiveTab('dashboard'); setIsSidebarOpen(false); }} 
           />
           <SidebarItem 
             icon={<Server size={20} />} 
             label="Agents" 
             active={activeTab === 'agents'} 
-            onClick={() => setActiveTab('agents')} 
+            onClick={() => { setActiveTab('agents'); setIsSidebarOpen(false); }} 
           />
           <SidebarItem 
             icon={<Network size={20} />} 
             label="Proxies" 
             active={activeTab === 'proxies'} 
-            onClick={() => setActiveTab('proxies')} 
+            onClick={() => { setActiveTab('proxies'); setIsSidebarOpen(false); }} 
           />
           <SidebarItem 
             icon={<FileText size={20} />} 
             label="Logs" 
             active={activeTab === 'logs'} 
-            onClick={() => setActiveTab('logs')} 
+            onClick={() => { setActiveTab('logs'); setIsSidebarOpen(false); }} 
           />
           <SidebarItem 
             icon={<Terminal size={20} />} 
             label="Terminal" 
             active={activeTab === 'terminal'} 
-            onClick={() => setActiveTab('terminal')} 
+            onClick={() => { setActiveTab('terminal'); setIsSidebarOpen(false); }} 
           />
           <SidebarItem 
             icon={<User size={20} />} 
             label="Profile" 
             active={activeTab === 'profile'} 
-            onClick={() => setActiveTab('profile')} 
+            onClick={() => { setActiveTab('profile'); setIsSidebarOpen(false); }} 
           />
           <SidebarItem 
             icon={<Settings size={20} />} 
             label="Settings" 
             active={activeTab === 'settings'} 
-            onClick={() => setActiveTab('settings')} 
+            onClick={() => { setActiveTab('settings'); setIsSidebarOpen(false); }} 
           />
         </nav>
 
@@ -1025,18 +1060,26 @@ const App: React.FC = () => {
       {/* Main Content */}
       <main className="flex-1 overflow-y-auto bg-[radial-gradient(circle_at_top_right,_var(--tw-gradient-stops))] from-neon-blue/5 via-transparent to-transparent">
         {/* Header */}
-        <header className="h-20 px-8 flex items-center justify-between border-b border-white/5 sticky top-0 bg-[#0a0a0c]/80 backdrop-blur-md z-10">
-          <div className="relative w-96">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500 w-4 h-4" />
-            <input 
-              type="text" 
-              placeholder="Search agents, ports, IPs..." 
-              className="w-full bg-white/5 border border-white/10 rounded-xl py-2 pl-10 pr-4 focus:outline-none focus:border-neon-blue/50 transition-colors"
-            />
+        <header className="h-20 px-4 md:px-8 flex items-center justify-between border-b border-white/5 sticky top-0 bg-[#0a0a0c]/80 backdrop-blur-md z-10">
+          <div className="flex items-center gap-4 flex-1">
+            <button 
+              className="lg:hidden p-2 text-gray-400 hover:text-white"
+              onClick={() => setIsSidebarOpen(true)}
+            >
+              <Menu size={24} />
+            </button>
+            <div className="relative w-full max-w-md hidden sm:block">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500 w-4 h-4" />
+              <input 
+                type="text" 
+                placeholder="Search agents, ports, IPs..." 
+                className="w-full bg-white/5 border border-white/10 rounded-xl py-2 pl-10 pr-4 focus:outline-none focus:border-neon-blue/50 transition-colors"
+              />
+            </div>
           </div>
           
-          <div className="flex items-center gap-4">
-            <div className={`flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-bold border ${
+          <div className="flex items-center gap-2 md:gap-4">
+            <div className={`hidden xs:flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-bold border ${
               wsConnected ? 'border-green-400/20 bg-green-400/10 text-green-400' : 'border-red-400/20 bg-red-400/10 text-red-400'
             }`}>
               {wsConnected ? <Wifi size={14} /> : <WifiOff size={14} />}
@@ -1061,13 +1104,14 @@ const App: React.FC = () => {
         <div className="p-8">
           {activeTab === 'dashboard' && (
             <>
-              <div className="flex justify-between items-end mb-8">
+              <div className="flex flex-col md:flex-row md:justify-between md:items-end gap-4 mb-8">
                 <div>
                   <h1 className="text-3xl font-bold">Network Overview</h1>
                   <p className="text-gray-400 mt-1">Real-time status of your proxy infrastructure</p>
                 </div>
-                <button className="bg-neon-blue text-black font-bold px-6 py-2.5 rounded-xl flex items-center gap-2 hover:bg-opacity-90 transition-all shadow-[0_0_20px_rgba(0,243,255,0.3)]">
-                  Add Agent
+                <button className="bg-neon-blue text-black font-bold px-6 py-2.5 rounded-xl flex items-center justify-center gap-2 hover:bg-opacity-90 transition-all shadow-[0_0_20px_rgba(0,243,255,0.3)] w-full md:w-auto">
+                  <Plus size={20} />
+                  <span>Add Agent</span>
                 </button>
               </div>
 
@@ -1198,6 +1242,108 @@ const App: React.FC = () => {
                     </div>
                     <div className="text-2xl font-mono font-bold">{totalBandwidth}</div>
                   </div>
+                </div>
+              </div>
+
+              {/* Infrastructure Health Section */}
+              <div className="mb-8">
+                <h2 className="text-xl font-bold mb-6 flex items-center gap-2">
+                  <Activity size={24} className="text-neon-blue" />
+                  Infrastructure Health
+                </h2>
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+                   {/* Online/Offline Card */}
+                   <div className="glass rounded-[32px] p-6 border border-white/10 flex flex-col justify-between">
+                      <h3 className="text-sm font-medium text-gray-400 mb-4">Node Connectivity</h3>
+                      <div className="flex items-center justify-around py-2">
+                         <div className="text-center">
+                            <div className="text-3xl font-bold text-green-400">{activeAgents}</div>
+                            <div className="text-[10px] uppercase tracking-wider text-gray-500 font-bold mt-1">Online</div>
+                         </div>
+                         <div className="h-10 w-px bg-white/10"></div>
+                         <div className="text-center">
+                            <div className="text-3xl font-bold text-red-400">{offlineAgents}</div>
+                            <div className="text-[10px] uppercase tracking-wider text-gray-500 font-bold mt-1">Offline</div>
+                         </div>
+                      </div>
+                      {disconnectedNodes.length > 0 && (
+                        <div className="mt-4 p-3 rounded-2xl bg-red-500/10 border border-red-500/20 animate-pulse">
+                          <div className="flex items-center gap-2 text-red-400 text-xs font-bold uppercase">
+                            <BellRing size={14} />
+                            Critical Alerts
+                          </div>
+                          <div className="mt-1 text-[10px] text-gray-400 truncate">
+                            {disconnectedNodes.length} node(s) unreachable
+                          </div>
+                        </div>
+                      )}
+                   </div>
+
+                   {/* Resource Averages */}
+                   <div className="glass rounded-[32px] p-6 border border-white/10">
+                      <h3 className="text-sm font-medium text-gray-400 mb-6">Global Resources (Avg)</h3>
+                      <div className="space-y-6">
+                        <div>
+                          <div className="flex justify-between text-xs mb-2">
+                            <span className="text-gray-400">Average CPU</span>
+                            <span className="font-bold">{Math.round(avgCPU)}%</span>
+                          </div>
+                          <div className="h-2 w-full bg-white/5 rounded-full overflow-hidden">
+                            <div className="h-full bg-neon-blue transition-all duration-500" style={{ width: `${avgCPU}%` }}></div>
+                          </div>
+                        </div>
+                        <div>
+                          <div className="flex justify-between text-xs mb-2">
+                            <span className="text-gray-400">Average RAM</span>
+                            <span className="font-bold">{Math.round(avgRAM)}%</span>
+                          </div>
+                          <div className="h-2 w-full bg-white/5 rounded-full overflow-hidden">
+                            <div className="h-full bg-neon-purple transition-all duration-500" style={{ width: `${avgRAM}%` }}></div>
+                          </div>
+                        </div>
+                      </div>
+                   </div>
+
+                   {/* Distribution Pie Chart */}
+                   <div className="lg:col-span-2 glass rounded-[32px] p-6 border border-white/10 flex flex-col">
+                      <h3 className="text-sm font-medium text-gray-400 mb-4">Resource Distribution</h3>
+                      <div className="flex-1 flex items-center justify-around gap-4">
+                        <div className="w-32 h-32">
+                          <ResponsiveContainer width="100%" height="100%">
+                            <PieChart>
+                              <Pie
+                                data={distributionData}
+                                cx="50%"
+                                cy="50%"
+                                innerRadius={35}
+                                outerRadius={50}
+                                paddingAngle={5}
+                                dataKey="value"
+                                isAnimationActive={false}
+                              >
+                                {distributionData.map((entry, index) => (
+                                  <Cell key={`cell-${index}`} fill={entry.color} />
+                                ))}
+                              </Pie>
+                              <Tooltip 
+                                contentStyle={{ backgroundColor: '#1a1a1c', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '12px' }}
+                              />
+                            </PieChart>
+                          </ResponsiveContainer>
+                        </div>
+                        <div className="space-y-4">
+                           {distributionData.map((d, i) => (
+                             <div key={i} className="flex items-center gap-3">
+                                <div className="w-3 h-3 rounded-full shadow-[0_0_8px_rgba(255,255,255,0.2)]" style={{ backgroundColor: d.color }}></div>
+                                <div className="flex flex-col">
+                                   <span className="text-xs text-gray-400 font-medium">{d.name}</span>
+                                   <span className="text-sm font-bold">{d.value} Nodes</span>
+                                </div>
+                             </div>
+                           ))}
+                        </div>
+                      </div>
+                   </div>
                 </div>
               </div>
 
