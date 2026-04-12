@@ -259,8 +259,8 @@ func (h *DashboardHandler) GetLogs(c *gin.Context) {
 // --- Install Script Handler ---
 
 func (h *DashboardHandler) GetInstallScript(c *gin.Context) {
-	scriptContent := "#!/bin/bash
+	scriptContent := `#!/bin/bash
 echo 'Install script will be provided by Agent #4'
-"
+`
 	c.String(http.StatusOK, scriptContent)
 }
