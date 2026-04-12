@@ -1,0 +1,31 @@
+# /etc/frp/frps.yaml (Template for FRP v0.68.0)
+# Đây là file cấu hình mà Server (Dashboard) sẽ quản lý và tự động cập nhật.
+
+bindAddr: "0.0.0.0"
+bindPort: 7000
+
+# Kênh liên lạc cho Web Dashboard (Dashboard nội bộ của FRP để theo dõi traffic)
+webServer:
+  addr: "0.0.0.0"
+  port: 7500
+  user: "admin"
+  password: "your_secure_password" # Sẽ được Dashboard (Agent #2) quản lý tự động
+
+# Cấu hình cho HTTP/HTTPS Proxy (Để Nginx chuyển tiếp traffic qua các tunnel này)
+vhostHTTPPort: 8080
+vhostHTTPSPort: 8443
+
+# Token bảo mật để Agent (FRPC) kết nối. 
+# Token này phải trùng khớp với cấu hình được gửi từ Dashboard xuống cho Agent qua gRPC.
+auth:
+  method: "token"
+  token: "SECRET_TOKEN_MANAGED_BY_DASHBOARD"
+
+# Quản lý Port Range cho các kết nối TCP/UDP
+allowPorts:
+  - start: 10000
+    end: 20000
+
+# Tự động gỡ các proxy không hoạt động
+maxProxyCountPerClient: 100
+maxPortsPerProxy: 10

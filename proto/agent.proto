@@ -1,0 +1,62 @@
+syntax = "proto3";
+package api;
+
+option go_package = "github.com/youruser/proxymanager/internal/api";
+
+service AgentService {
+  // Agent đăng ký với Server khi khởi chạy lần đầu
+  rpc Register(RegisterRequest) returns (RegisterResponse);
+  
+  // Agent gửi báo cáo định kỳ về tình trạng hệ thống và port
+  rpc Heartbeat(ReportRequest) returns (ReportResponse);
+
+  // Server gửi lệnh điều khiển tới Agent (ví dụ: yêu cầu reload FRPC)
+  rpc CommandStream(AgentID) returns (stream Command);
+}
+
+message RegisterRequest {
+  string hostname = 1;
+  string os = 2;
+  string private_ip = 3;
+}
+
+message RegisterResponse {
+  string agent_id = 1;
+  string frpc_config_template = 2;
+  string frp_server_addr = 3;
+  string frp_server_port = 4;
+  string frp_token = 5;
+}
+
+message ReportRequest {
+  string agent_id = 1;
+  HardwareStats hardware = 2;
+  repeated PortInfo open_ports = 3;
+}
+
+message ReportResponse {
+  bool success = 1;
+  string message = 2;
+}
+
+message HardwareStats {
+  double cpu_usage = 1;
+  uint64 ram_total = 2;
+  uint64 ram_used = 3;
+  uint64 disk_free = 4;
+}
+
+message PortInfo {
+  int32 port = 1;
+  string protocol = 2; // tcp/udp
+  string service_name = 3; // e.g., ssh, http, mysql
+}
+
+message AgentID {
+  string agent_id = 1;
+}
+
+message Command {
+  string action = 1; // "RELOAD_FRPC", "UPGRADE_AGENT", "RESTART_AGENT"
+  string payload = 2; // Nội dung bổ sung cho lệnh (ví dụ config frpc mới)
+}
