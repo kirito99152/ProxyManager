@@ -52,3 +52,38 @@ CREATE TABLE IF NOT EXISTS hardware_logs (
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (agent_id) REFERENCES agents(id) ON DELETE CASCADE
 ) ENGINE=InnoDB;
+
+-- Tối ưu hóa cho Milestone #4
+CREATE INDEX IF NOT EXISTS idx_hardware_agent_id_created_at ON hardware_logs (agent_id, created_at);
+
+-- Bảng quản lý người dùng (Milestone 3)
+CREATE TABLE IF NOT EXISTS users (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    username VARCHAR(50) UNIQUE NOT NULL,
+    password_hash VARCHAR(255) NOT NULL,
+    role ENUM('admin', 'user') DEFAULT 'user',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+) ENGINE=InnoDB;
+
+-- Bảng thu thập log từ Agent (Milestone 3)
+CREATE TABLE IF NOT EXISTS agent_logs (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    agent_id VARCHAR(36) NOT NULL,
+    log_level VARCHAR(20),
+    message TEXT,
+    timestamp TIMESTAMP,
+    source VARCHAR(100),
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (agent_id) REFERENCES agents(id) ON DELETE CASCADE,
+    INDEX idx_agent_id_timestamp (agent_id, timestamp)
+) ENGINE=InnoDB;
+
+-- Bảng cấu hình hệ thống (Webhook, Alerts - Milestone 3)
+CREATE TABLE IF NOT EXISTS settings (
+    `key` VARCHAR(100) PRIMARY KEY,
+    `value` TEXT,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+) ENGINE=InnoDB;
+
+-- Tài khoản admin mặc định (Mật khẩu: admin123 - Cần thay đổi khi chạy thực tế)
+INSERT IGNORE INTO users (username, password_hash, role) VALUES ('admin', '$2a$10$wTfH.d./k2vBInI3n7M0.eCq0L07H5mF4D9hVb5l3FhZ4D5X/r4T6', 'admin');

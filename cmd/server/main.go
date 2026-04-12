@@ -32,6 +32,9 @@ func main() {
 	// Start Offline Agent Monitor
 	go dashboard.StartAgentMonitor(database)
 
+	// Start Data Retention Policy Worker
+	go db.StartRetentionPolicy(database)
+
 	// Create a single API handler to be shared
 	apiHandler := api.NewHandler(database)
 
