@@ -1,0 +1,33 @@
+name: Build and Release
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set up Go
+      uses: actions/setup-go@v5
+      with:
+        go-version: '1.22'
+
+    - name: Build Server
+      run: |
+        mkdir -p bin
+        go build -v -o bin/server cmd/server/main.go
+
+    - name: Build Agent
+      run: |
+        go build -v -o bin/agent cmd/agent/main.go
+
+    - name: Upload Binaries
+      uses: actions/upload-artifact@v4
+      with:
+        name: binaries
+        path: bin/
