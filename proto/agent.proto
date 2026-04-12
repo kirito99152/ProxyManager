@@ -10,7 +10,10 @@ service AgentService {
   // Agent gửi báo cáo định kỳ về tình trạng hệ thống và port
   rpc Heartbeat(ReportRequest) returns (ReportResponse);
 
-  // Server gửi lệnh điều khiển tới Agent (ví dụ: yêu cầu reload FRPC)
+  // Agent gửi log hệ thống về Server
+  rpc ForwardLog(LogEntry) returns (LogResponse);
+
+  // Server gửi lệnh điều khiển tới Agent
   rpc CommandStream(AgentID) returns (stream Command);
 }
 
@@ -32,6 +35,7 @@ message ReportRequest {
   string agent_id = 1;
   HardwareStats hardware = 2;
   repeated PortInfo open_ports = 3;
+  repeated ServiceInfo services = 4; // Milestone #3: Systemd services
 }
 
 message ReportResponse {
@@ -44,14 +48,31 @@ message HardwareStats {
   uint64 ram_total = 2;
   uint64 ram_used = 3;
   uint64 disk_free = 4;
-  uint64 net_in = 5;  // Bytes received since last report
-  uint64 net_out = 6; // Bytes sent since last report
+  uint64 net_in = 5;
+  uint64 net_out = 6;
+}
+
+message ServiceInfo {
+  string name = 1;
+  string status = 2; // running, stopped, unknown
 }
 
 message PortInfo {
   int32 port = 1;
-  string protocol = 2; // tcp/udp
-  string service_name = 3; // e.g., ssh, http, mysql
+  string protocol = 2;
+  string service_name = 3;
+}
+
+message LogEntry {
+  string agent_id = 1;
+  string timestamp = 2;
+  string log_level = 3; // INFO, WARN, ERROR
+  string source = 4;    // e.g., auth.log, frpc.log
+  string message = 5;
+}
+
+message LogResponse {
+  bool success = 1;
 }
 
 message AgentID {
@@ -59,6 +80,6 @@ message AgentID {
 }
 
 message Command {
-  string action = 1; // "RELOAD_FRPC", "UPGRADE_AGENT", "RESTART_AGENT"
-  string payload = 2; // Nội dung bổ sung cho lệnh (ví dụ config frpc mới)
+  string action = 1; // "RELOAD_FRPC", "UPGRADE_AGENT", "RESTART_AGENT", "REMOTE_EXEC"
+  string payload = 2; // config hoặc script shell
 }

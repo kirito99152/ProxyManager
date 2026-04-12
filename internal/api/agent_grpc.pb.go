@@ -21,6 +21,7 @@ const _ = grpc.SupportPackageIsVersion9
 const (
 	AgentService_Register_FullMethodName      = "/api.AgentService/Register"
 	AgentService_Heartbeat_FullMethodName     = "/api.AgentService/Heartbeat"
+	AgentService_ForwardLog_FullMethodName    = "/api.AgentService/ForwardLog"
 	AgentService_CommandStream_FullMethodName = "/api.AgentService/CommandStream"
 )
 
@@ -32,7 +33,9 @@ type AgentServiceClient interface {
 	Register(ctx context.Context, in *RegisterRequest, opts ...grpc.CallOption) (*RegisterResponse, error)
 	// Agent gửi báo cáo định kỳ về tình trạng hệ thống và port
 	Heartbeat(ctx context.Context, in *ReportRequest, opts ...grpc.CallOption) (*ReportResponse, error)
-	// Server gửi lệnh điều khiển tới Agent (ví dụ: yêu cầu reload FRPC)
+	// Agent gửi log hệ thống về Server
+	ForwardLog(ctx context.Context, in *LogEntry, opts ...grpc.CallOption) (*LogResponse, error)
+	// Server gửi lệnh điều khiển tới Agent
 	CommandStream(ctx context.Context, in *AgentID, opts ...grpc.CallOption) (grpc.ServerStreamingClient[Command], error)
 }
 
@@ -58,6 +61,16 @@ func (c *agentServiceClient) Heartbeat(ctx context.Context, in *ReportRequest, o
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(ReportResponse)
 	err := c.cc.Invoke(ctx, AgentService_Heartbeat_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *agentServiceClient) ForwardLog(ctx context.Context, in *LogEntry, opts ...grpc.CallOption) (*LogResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(LogResponse)
+	err := c.cc.Invoke(ctx, AgentService_ForwardLog_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -91,7 +104,9 @@ type AgentServiceServer interface {
 	Register(context.Context, *RegisterRequest) (*RegisterResponse, error)
 	// Agent gửi báo cáo định kỳ về tình trạng hệ thống và port
 	Heartbeat(context.Context, *ReportRequest) (*ReportResponse, error)
-	// Server gửi lệnh điều khiển tới Agent (ví dụ: yêu cầu reload FRPC)
+	// Agent gửi log hệ thống về Server
+	ForwardLog(context.Context, *LogEntry) (*LogResponse, error)
+	// Server gửi lệnh điều khiển tới Agent
 	CommandStream(*AgentID, grpc.ServerStreamingServer[Command]) error
 	mustEmbedUnimplementedAgentServiceServer()
 }
@@ -108,6 +123,9 @@ func (UnimplementedAgentServiceServer) Register(context.Context, *RegisterReques
 }
 func (UnimplementedAgentServiceServer) Heartbeat(context.Context, *ReportRequest) (*ReportResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method Heartbeat not implemented")
+}
+func (UnimplementedAgentServiceServer) ForwardLog(context.Context, *LogEntry) (*LogResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ForwardLog not implemented")
 }
 func (UnimplementedAgentServiceServer) CommandStream(*AgentID, grpc.ServerStreamingServer[Command]) error {
 	return status.Error(codes.Unimplemented, "method CommandStream not implemented")
@@ -169,6 +187,24 @@ func _AgentService_Heartbeat_Handler(srv interface{}, ctx context.Context, dec f
 	return interceptor(ctx, in, info, handler)
 }
 
+func _AgentService_ForwardLog_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(LogEntry)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AgentServiceServer).ForwardLog(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: AgentService_ForwardLog_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AgentServiceServer).ForwardLog(ctx, req.(*LogEntry))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _AgentService_CommandStream_Handler(srv interface{}, stream grpc.ServerStream) error {
 	m := new(AgentID)
 	if err := stream.RecvMsg(m); err != nil {
@@ -194,6 +230,10 @@ var AgentService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "Heartbeat",
 			Handler:    _AgentService_Heartbeat_Handler,
+		},
+		{
+			MethodName: "ForwardLog",
+			Handler:    _AgentService_ForwardLog_Handler,
 		},
 	},
 	Streams: []grpc.StreamDesc{

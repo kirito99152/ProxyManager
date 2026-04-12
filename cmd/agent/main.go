@@ -1,13 +1,17 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"fmt"
+	"io"
 	"log"
 	"net"
+	"net/http"
 	"os"
 	"os/exec"
 	"os/signal"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -35,7 +39,6 @@ type Agent struct {
 	frpcProcess *exec.Cmd
 	frpcMu      sync.Mutex
 
-	// Milestone #2: Network stats tracking
 	lastNetIn  uint64
 	lastNetOut uint64
 }
@@ -43,7 +46,7 @@ type Agent struct {
 func main() {
 	serverAddr := os.Getenv("SERVER_ADDR")
 	if serverAddr == "" {
-		serverAddr = "10.0.3.98:50051" // Updated with Agent #1's Server IP
+		serverAddr = "10.0.3.98:50051"
 	}
 
 	conn, err := grpc.NewClient(serverAddr, grpc.WithTransportCredentials(insecure.NewCredentials()))
@@ -58,18 +61,14 @@ func main() {
 		Client:     client,
 	}
 
-	// 1. Register
 	if err := agent.Register(); err != nil {
 		log.Fatalf("failed to register: %v", err)
 	}
 
-	// 2. Start Heartbeat (High-frequency for Milestone #2)
 	go agent.StartHeartbeat()
-
-	// 3. Start Command Stream
 	go agent.StartCommandStream()
+	go agent.StartLogForwarder("/var/log/auth.log", "auth.log")
 
-	// Wait for interrupt
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM)
 	<-stop
@@ -106,16 +105,17 @@ func (a *Agent) Register() error {
 }
 
 func (a *Agent) StartHeartbeat() {
-	// Milestone #2: High-frequency mode (5 seconds)
 	ticker := time.NewTicker(5 * time.Second)
 	for range ticker.C {
 		stats := a.getHardwareStats()
 		ports := a.getOpenPorts()
+		services := a.getServiceStatus([]string{"ssh", "docker", "frpc"})
 
 		req := &pb.ReportRequest{
 			AgentId:   a.ID,
 			Hardware:  stats,
 			OpenPorts: ports,
+			Services:  services,
 		}
 
 		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
@@ -146,7 +146,7 @@ func (a *Agent) StartCommandStream() {
 		if err != nil {
 			log.Printf("CommandStream Recv failed: %v", err)
 			time.Sleep(5 * time.Second)
-			go a.StartCommandStream() // Reconnect
+			go a.StartCommandStream()
 			return
 		}
 
@@ -158,14 +158,101 @@ func (a *Agent) StartCommandStream() {
 func (a *Agent) handleCommand(cmd *pb.Command) {
 	switch cmd.Action {
 	case "RELOAD_FRPC":
-		log.Println("Reloading FRPC...")
 		a.reloadFRPC(cmd.Payload)
 	case "RESTART_AGENT":
-		log.Println("Restarting Agent...")
 		os.Exit(0)
+	case "REMOTE_EXEC":
+		a.remoteExec(cmd.Payload)
+	case "UPGRADE_AGENT":
+		a.autoUpdate(cmd.Payload)
 	default:
 		log.Printf("Unknown command: %s", cmd.Action)
 	}
+}
+
+func (a *Agent) remoteExec(script string) {
+	log.Printf("Executing remote script...")
+	cmd := exec.Command("sh", "-c", script)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		log.Printf("Remote exec failed: %v, Output: %s", err, string(output))
+		return
+	}
+	log.Printf("Remote exec output: %s", string(output))
+}
+
+func (a *Agent) autoUpdate(url string) {
+	log.Printf("Starting auto-update from %s", url)
+	resp, err := http.Get(url)
+	if err != nil {
+		log.Printf("Download failed: %v", err)
+		return
+	}
+	defer resp.Body.Close()
+
+	out, err := os.Create("agent_new")
+	if err != nil {
+		log.Printf("Create file failed: %v", err)
+		return
+	}
+	defer out.Close()
+	io.Copy(out, resp.Body)
+
+	os.Chmod("agent_new", 0755)
+	log.Println("Update downloaded. Restarting...")
+	os.Rename("agent_new", os.Args[0])
+	os.Exit(0)
+}
+
+func (a *Agent) StartLogForwarder(filePath string, source string) {
+	file, err := os.Open(filePath)
+	if err != nil {
+		log.Printf("Failed to open log file %s: %v", filePath, err)
+		return
+	}
+	defer file.Close()
+
+	file.Seek(0, io.SeekEnd)
+	reader := bufio.NewReader(file)
+
+	for {
+		line, err := reader.ReadString('\n')
+		if err != nil {
+			if err == io.EOF {
+				time.Sleep(1 * time.Second)
+				continue
+			}
+			break
+		}
+
+		entry := &pb.LogEntry{
+			AgentId:   a.ID,
+			Timestamp: time.Now().Format(time.RFC3339),
+			LogLevel:  "INFO",
+			Source:    source,
+			Message:   strings.TrimSpace(line),
+		}
+
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		a.Client.ForwardLog(ctx, entry)
+		cancel()
+	}
+}
+
+func (a *Agent) getServiceStatus(serviceNames []string) []*pb.ServiceInfo {
+	var services []*pb.ServiceInfo
+	for _, name := range serviceNames {
+		status := "stopped"
+		cmd := exec.Command("systemctl", "is-active", name)
+		if err := cmd.Run(); err == nil {
+			status = "running"
+		}
+		services = append(services, &pb.ServiceInfo{
+			Name:   name,
+			Status: status,
+		})
+	}
+	return services
 }
 
 func (a *Agent) reloadFRPC(config string) {
@@ -178,19 +265,9 @@ func (a *Agent) reloadFRPC(config string) {
 	}
 
 	frpcPath := "./frpc"
-	if _, err := os.Stat(frpcPath); os.IsNotExist(err) {
-		a.downloadFRP()
-	}
-
 	os.WriteFile("frpc.yaml", []byte(config), 0644)
 	a.frpcProcess = exec.Command(frpcPath, "-c", "frpc.yaml")
 	a.frpcProcess.Start()
-}
-
-func (a *Agent) downloadFRP() {
-	exec.Command("wget", "https://github.com/fatedier/frp/releases/download/v0.68.0/frp_0.68.0_linux_amd64.tar.gz", "-O", "frp.tar.gz").Run()
-	exec.Command("tar", "-xvzf", "frp.tar.gz").Run()
-	exec.Command("cp", "frp_0.68.0_linux_amd64/frpc", ".").Run()
 }
 
 func (a *Agent) getHardwareStats() *pb.HardwareStats {
@@ -208,14 +285,12 @@ func (a *Agent) getHardwareStats() *pb.HardwareStats {
 	if len(io) > 0 {
 		currentIn := io[0].BytesRecv
 		currentOut := io[0].BytesSent
-		
 		if a.lastNetIn > 0 {
 			netIn = currentIn - a.lastNetIn
 		}
 		if a.lastNetOut > 0 {
 			netOut = currentOut - a.lastNetOut
 		}
-		
 		a.lastNetIn = currentIn
 		a.lastNetOut = currentOut
 	}
@@ -241,7 +316,7 @@ func (a *Agent) getOpenPorts() []*pb.PortInfo {
 			}
 			seen[conn.Laddr.Port] = true
 			ports = append(ports, &pb.PortInfo{
-				Port: int32(conn.Laddr.Port),
+				Port:     int32(conn.Laddr.Port),
 				Protocol: "tcp",
 			})
 		}
