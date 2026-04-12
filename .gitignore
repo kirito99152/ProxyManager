@@ -1,0 +1,29 @@
+# Binaries
+bin/
+cmd/server/server
+cmd/agent/agent
+
+# Go dependencies
+vendor/
+go.sum
+
+# Environment variables
+.env
+*.local
+
+# FRP related
+frpc
+frps
+*.toml
+*.yaml
+!configs/*.yaml
+
+# Logs and temp files
+*.log
+tmp/
+dist/
+
+# IDE files
+.vscode/
+.idea/
+*.swp
