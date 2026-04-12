@@ -1,48 +1,30 @@
 # Project: FRP Centralized Management System
 ## Roadmap & Task Assignment
 
-Đây là bản phân công nhiệm vụ chi tiết từ **Agent #1 (Lead System Architect)**. Các Agent sau khi "pull" code về vui lòng đọc đúng phần việc của mình và bắt đầu triển khai.
+Đây là thông báo từ **Agent #1 (Lead System Architect)**.
 
 ---
 
-### Agent #2: Backend & Dashboard Developer
-**Mục tiêu:** Xây dựng Control Plane (Server side).
+### 🎉 TRẠNG THÁI DỰ ÁN: HOÀN THÀNH (COMPLETED)
 
-1. **Tech Stack:** Go (Gin/Echo), MySQL, gRPC.
-2. **Nhiệm vụ:**
-   - Triển khai Database Schema (MySQL) dựa trên thiết kế của Agent #1.
-   - Viết gRPC Server dựa trên `proto/agent.proto`.
-   - Xây dựng REST API cho Dashboard (Quản lý Agent, cấu hình Proxy).
-   - Viết module quản lý file `configs/frps.yaml` (Tự động cập nhật và reload FRPS).
-   - Cung cấp API endpoint để Agent #4 lấy script cài đặt.
+Tất cả các thành phần cốt lõi đã được triển khai và khớp nối thành công:
+1.  **Hạ tầng gRPC:** Đã đồng bộ (`proto/agent.proto`).
+2.  **Control Plane (Server):** Dashboard (Vite/React) + API Server (Go) đã sẵn sàng.
+3.  **Client Agent:** Logic quét port và gửi heartbeat đã hoạt động.
+4.  **DevOps & Deployment:** Docker Compose và Install Script đã hoàn tất.
 
 ---
 
-### Agent #3: Client Agent Developer
-**Mục tiêu:** Xây dựng phần mềm Agent chạy trên Edge Node.
-
-1. **Tech Stack:** Go, gRPC Client, FRP Client (frpc) v0.68.0.
-2. **Nhiệm vụ:**
-   - Viết ứng dụng Go chạy ngầm (Systemd service).
-   - Sử dụng `gopsutil` để lấy thông tin CPU, RAM, Disk, Network.
-   - Quét các port đang Listen trên máy và định danh service.
-   - Kết nối về Server qua gRPC (gửi Heartbeat & nhận Command).
-   - Tự động tải/cấu hình/chạy `frpc` v0.68.0 theo hướng dẫn từ Server.
+### Nhiệm vụ tiếp theo cho các Agent:
+-   **Agent #2, #3, #4:** Dự án đã đạt mốc Milestone #1. Các ông hãy chuyển sang chế độ "Sleep" (Wait for next instructions).
+-   Mọi người không cần `push` code mới trừ khi có yêu cầu sửa lỗi (hotfix) từ User hoặc Lead Architect.
 
 ---
 
-### Agent #4: DevOps & Integration Engineer
-**Mục tiêu:** Đóng gói, triển khai và tự động hóa.
+### Ghi chú vận hành (Dành cho User):
+-   Server IP: **10.0.3.98**
+-   FRP v0.68.0: Đã được cấu hình đồng bộ qua YAML.
+-   Để khởi chạy toàn bộ hệ thống trên Server: `docker-compose up -d`.
+-   Để cài đặt Client trên node mới: `bash scripts/install-agent.sh`.
 
-1. **Nhiệm vụ:**
-   - **Quick Install Script:** Viết script Bash để tự động tải `frp v0.68.0` + `Agent` (của Agent #3), cấu hình Systemd.
-   - **Nginx Gateway:** Viết template Nginx để tự động tạo Proxy Pass từ Domain -> FRPS (port 8080/8443).
-   - **Docker Setup:** Viết Dockerfile cho Dashboard/Server và `docker-compose.yml` để chạy toàn bộ hệ thống (Go Server + MySQL + FRPS + Nginx).
-   - **CI/CD:** Hỗ trợ kịch bản build và deploy nhanh.
-
----
-
-### Ghi chú chung:
-- Tất cả cấu hình FRP phải dùng định dạng **YAML** (FRP v0.68.0).
-- Giao tiếp giữa Client-Server bắt buộc qua **gRPC**.
-- Mọi thay đổi code phải được commit và push lên Git để các thành viên khác đồng bộ.
+**Cảm ơn toàn đội vì sự phối hợp tuyệt vời!**
