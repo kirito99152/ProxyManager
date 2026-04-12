@@ -25,7 +25,12 @@ import {
   EyeOff,
   Loader2,
   Trash2,
-  Plus
+  Plus,
+  Terminal,
+  FileText,
+  Send,
+  Users,
+  BellRing
 } from 'lucide-react';
 import { 
   XAxis, 
@@ -84,10 +89,7 @@ interface TrafficStats {
 
 interface WSMessage {
   topic: string;
-  payload: {
-    agent_id: string;
-    hardware: HardwareStats;
-  };
+  payload: any;
 }
 
 // --- Utils ---
@@ -394,6 +396,340 @@ const ProfilePage: React.FC<{ user: User }> = ({ user }) => {
   );
 };
 
+// --- New Components ---
+
+interface LogEntry {
+  id: string;
+  agent_id: string;
+  agent_name: string;
+  severity: 'info' | 'warning' | 'error';
+  message: string;
+  timestamp: string;
+}
+
+interface WebhookConfig {
+  type: 'telegram' | 'discord';
+  enabled: boolean;
+  url: string;
+  events: string[];
+}
+
+const LogsPage: React.FC<{ logs: LogEntry[]; agents: DashboardAgent[] }> = ({ logs, agents }) => {
+  const [filter, setFilter] = useState({
+    severity: 'all',
+    agent_id: 'all',
+    search: ''
+  });
+
+  const filteredLogs = logs.filter(log => {
+    if (filter.severity !== 'all' && log.severity !== filter.severity) return false;
+    if (filter.agent_id !== 'all' && log.agent_id !== filter.agent_id) return false;
+    if (filter.search && !log.message.toLowerCase().includes(filter.search.toLowerCase()) && !log.agent_name.toLowerCase().includes(filter.search.toLowerCase())) return false;
+    return true;
+  });
+
+  return (
+    <div className="animate-in fade-in slide-in-from-bottom-4 duration-500">
+       <div className="flex justify-between items-end mb-8">
+        <div>
+          <h1 className="text-3xl font-bold">System Logs</h1>
+          <p className="text-gray-400 mt-1">Real-time event stream from all active agents</p>
+        </div>
+      </div>
+
+      <div className="glass rounded-[32px] p-6 border border-white/10 mb-8">
+        <div className="flex flex-wrap gap-4">
+          <div className="flex-1 min-w-[200px] relative">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500 w-4 h-4" />
+            <input 
+              type="text" 
+              placeholder="Search logs..." 
+              value={filter.search}
+              onChange={(e) => setFilter({...filter, search: e.target.value})}
+              className="w-full bg-white/5 border border-white/10 rounded-xl py-2 pl-10 pr-4 focus:outline-none focus:border-neon-blue/50 transition-colors"
+            />
+          </div>
+          <select 
+            value={filter.severity}
+            onChange={(e) => setFilter({...filter, severity: e.target.value as any})}
+            className="bg-[#1a1a1c] border border-white/10 rounded-xl py-2 px-4 focus:outline-none focus:border-neon-blue/50 text-gray-300"
+          >
+            <option value="all">All Severities</option>
+            <option value="info">Info</option>
+            <option value="warning">Warning</option>
+            <option value="error">Error</option>
+          </select>
+          <select 
+            value={filter.agent_id}
+            onChange={(e) => setFilter({...filter, agent_id: e.target.value})}
+            className="bg-[#1a1a1c] border border-white/10 rounded-xl py-2 px-4 focus:outline-none focus:border-neon-blue/50 text-gray-300"
+          >
+            <option value="all">All Agents</option>
+            {agents.map(a => <option key={a.id} value={a.id}>{a.hostname}</option>)}
+          </select>
+        </div>
+      </div>
+
+      <div className="glass rounded-[32px] border border-white/10 overflow-hidden">
+        <div className="max-h-[600px] overflow-y-auto">
+          <table className="w-full text-left">
+            <thead className="sticky top-0 bg-[#1a1a1c] z-10 border-b border-white/5">
+              <tr className="text-gray-400 text-sm uppercase tracking-wider">
+                <th className="px-6 py-4 font-semibold">Timestamp</th>
+                <th className="px-6 py-4 font-semibold">Agent</th>
+                <th className="px-6 py-4 font-semibold">Severity</th>
+                <th className="px-6 py-4 font-semibold">Message</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-white/5 font-mono text-xs">
+              {filteredLogs.map((log) => (
+                <tr key={log.id} className="hover:bg-white/5 transition-colors">
+                  <td className="px-6 py-3 text-gray-500 whitespace-nowrap">
+                    {new Date(log.timestamp).toLocaleTimeString()}
+                  </td>
+                  <td className="px-6 py-3 text-neon-blue whitespace-nowrap">{log.agent_name}</td>
+                  <td className="px-6 py-3">
+                    <span className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase ${
+                      log.severity === 'error' ? 'bg-red-500/20 text-red-400' :
+                      log.severity === 'warning' ? 'bg-yellow-500/20 text-yellow-400' :
+                      'bg-green-500/20 text-green-400'
+                    }`}>
+                      {log.severity}
+                    </span>
+                  </td>
+                  <td className="px-6 py-3 text-gray-300">{log.message}</td>
+                </tr>
+              ))}
+              {filteredLogs.length === 0 && (
+                <tr>
+                  <td colSpan={4} className="px-6 py-12 text-center text-gray-500">
+                    No logs found matching your filters.
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+const TerminalPage: React.FC<{ agents: DashboardAgent[] }> = ({ agents }) => {
+  const [selectedAgent, setSelectedAgent] = useState(agents[0]?.id || '');
+  const [history, setHistory] = useState<{ type: 'cmd' | 'out', text: string }[]>([
+    { type: 'out', text: 'Welcome to ProxyManager Shell Console v1.0.0' },
+    { type: 'out', text: 'Connected to remote agent. Type "help" for list of commands.' },
+  ]);
+  const [input, setInput] = useState('');
+  const scrollRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (scrollRef.current) {
+      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+    }
+  }, [history]);
+
+  const handleCommand = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!input.trim()) return;
+
+    const cmd = input.trim();
+    setHistory(prev => [...prev, { type: 'cmd', text: cmd }]);
+    setInput('');
+
+    // Mock output
+    setTimeout(() => {
+      let output = '';
+      const command = cmd.toLowerCase();
+      if (command === 'help') {
+        output = 'Available commands: help, status, netstat, ps, clear, echo [text]';
+      } else if (command === 'status') {
+        output = `Agent: ${agents.find(a => a.id === selectedAgent)?.hostname || 'Unknown'}\nStatus: Online\nUptime: 14 days, 2:45:12\nCPU Load: 12.4%`;
+      } else if (command === 'netstat') {
+        output = 'Proto  Local Address          Foreign Address        State\ntcp    0.0.0.0:80             0.0.0.0:0              LISTEN\ntcp    0.0.0.0:443            0.0.0.0:0              LISTEN';
+      } else if (command === 'clear') {
+        setHistory([]);
+        return;
+      } else if (command.startsWith('echo ')) {
+        output = cmd.substring(5);
+      } else {
+        output = `sh: command not found: ${cmd}`;
+      }
+      setHistory(prev => [...prev, { type: 'out', text: output }]);
+    }, 100);
+  };
+
+  return (
+    <div className="animate-in fade-in slide-in-from-bottom-4 duration-500 h-full flex flex-col">
+       <div className="flex justify-between items-center mb-8">
+        <div>
+          <h1 className="text-3xl font-bold">Terminal</h1>
+          <p className="text-gray-400 mt-1">Execute remote commands on your agents</p>
+        </div>
+        <div className="flex items-center gap-4">
+          <label className="text-sm text-gray-500 font-medium uppercase">Select Agent:</label>
+          <select 
+            value={selectedAgent}
+            onChange={(e) => setSelectedAgent(e.target.value)}
+            className="bg-[#1a1a1c] border border-white/10 rounded-xl py-2 px-4 focus:outline-none focus:border-neon-blue/50 text-gray-300"
+          >
+            {agents.map(a => <option key={a.id} value={a.id}>{a.hostname} ({a.private_ip})</option>)}
+          </select>
+        </div>
+      </div>
+
+      <div className="flex-1 glass rounded-[32px] border border-white/10 overflow-hidden flex flex-col font-mono text-sm bg-black/40 min-h-[500px]">
+        <div className="p-4 bg-white/5 border-b border-white/5 flex items-center justify-between">
+          <div className="flex gap-1.5">
+            <div className="w-3 h-3 rounded-full bg-red-500/50"></div>
+            <div className="w-3 h-3 rounded-full bg-yellow-500/50"></div>
+            <div className="w-3 h-3 rounded-full bg-green-500/50"></div>
+          </div>
+          <div className="text-[10px] text-gray-500 uppercase tracking-widest font-bold">bash — {agents.find(a => a.id === selectedAgent)?.hostname || 'agent'}</div>
+          <div></div>
+        </div>
+        
+        <div ref={scrollRef} className="flex-1 p-6 overflow-y-auto space-y-2">
+          {history.map((item, i) => (
+            <div key={i} className={item.type === 'cmd' ? 'text-neon-blue' : 'text-gray-300 whitespace-pre-wrap'}>
+              {item.type === 'cmd' && <span className="text-green-400 mr-2">$</span>}
+              {item.text}
+            </div>
+          ))}
+        </div>
+
+        <form onSubmit={handleCommand} className="p-4 bg-white/5 border-t border-white/5 flex items-center gap-3">
+          <span className="text-green-400 font-bold">$</span>
+          <input 
+            type="text" 
+            value={input}
+            onChange={(e) => setInput(e.target.value)}
+            autoFocus
+            className="flex-1 bg-transparent border-none outline-none text-white placeholder:text-gray-700"
+            placeholder="Type a command..."
+          />
+        </form>
+      </div>
+    </div>
+  );
+};
+
+const SettingsPage: React.FC = () => {
+  const [webhooks, setWebhooks] = useState<WebhookConfig[]>([
+    { type: 'telegram', enabled: true, url: 'https://api.telegram.org/bot...', events: ['agent_offline', 'critical_error'] },
+    { type: 'discord', enabled: false, url: '', events: ['all'] }
+  ]);
+
+  const [users, setUsers] = useState([
+    { id: 1, username: 'admin', role: 'Administrator', status: 'Active' },
+    { id: 2, username: 'operator_john', role: 'Operator', status: 'Active' },
+    { id: 3, username: 'guest_user', role: 'Viewer', status: 'Inactive' }
+  ]);
+
+  return (
+    <div className="animate-in fade-in slide-in-from-bottom-4 duration-500">
+      <div className="flex justify-between items-end mb-8">
+        <div>
+          <h1 className="text-3xl font-bold">Settings</h1>
+          <p className="text-gray-400 mt-1">Configure platform-wide integrations and users</p>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+        {/* Webhooks Section */}
+        <div className="glass rounded-[32px] p-8 border border-white/10">
+          <h3 className="text-xl font-bold mb-6 flex items-center gap-2">
+            <BellRing className="text-neon-purple" size={24} />
+            Notifications & Webhooks
+          </h3>
+          
+          <div className="space-y-6">
+            {webhooks.map((hook, idx) => (
+              <div key={idx} className="p-6 rounded-2xl bg-white/5 border border-white/5">
+                <div className="flex justify-between items-start mb-4">
+                  <div className="flex items-center gap-3">
+                    <div className={`w-10 h-10 rounded-xl flex items-center justify-center ${hook.type === 'telegram' ? 'bg-sky-500/20 text-sky-400' : 'bg-indigo-500/20 text-indigo-400'}`}>
+                      {hook.type === 'telegram' ? <Send size={20} /> : <Activity size={20} />}
+                    </div>
+                    <div>
+                      <h4 className="font-bold capitalize">{hook.type} Webhook</h4>
+                      <p className="text-[10px] text-gray-500 uppercase font-bold tracking-wider">Status: <span className={hook.enabled ? 'text-green-400' : 'text-red-400'}>{hook.enabled ? 'Active' : 'Disabled'}</span></p>
+                    </div>
+                  </div>
+                  <button className={`w-12 h-6 rounded-full relative transition-colors ${hook.enabled ? 'bg-neon-blue' : 'bg-white/10'}`}>
+                    <div className={`absolute top-1 w-4 h-4 rounded-full bg-white transition-all ${hook.enabled ? 'left-7' : 'left-1'}`}></div>
+                  </button>
+                </div>
+                <div className="space-y-3">
+                  <label className="text-xs text-gray-400">Webhook URL</label>
+                  <input 
+                    type="password" 
+                    value={hook.url} 
+                    readOnly
+                    className="w-full bg-black/20 border border-white/5 rounded-lg py-2 px-3 text-xs text-gray-400 font-mono"
+                  />
+                  <div className="flex flex-wrap gap-2 pt-2">
+                    {hook.events.map(ev => (
+                      <span key={ev} className="text-[9px] font-bold bg-white/10 text-gray-400 px-2 py-0.5 rounded uppercase">{ev}</span>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            ))}
+            <button className="w-full py-4 border-2 border-dashed border-white/10 rounded-2xl text-gray-500 hover:text-white hover:border-white/20 transition-all flex items-center justify-center gap-2">
+              <Plus size={18} />
+              <span>Add New Integration</span>
+            </button>
+          </div>
+        </div>
+
+        {/* User Management Section */}
+        <div className="glass rounded-[32px] p-8 border border-white/10">
+          <div className="flex justify-between items-center mb-6">
+            <h3 className="text-xl font-bold flex items-center gap-2">
+              <Users className="text-neon-blue" size={24} />
+              User Management
+            </h3>
+            <button className="p-2 rounded-lg bg-neon-blue/10 text-neon-blue hover:bg-neon-blue/20 transition-colors">
+              <Plus size={20} />
+            </button>
+          </div>
+
+          <div className="space-y-4">
+            {users.map(u => (
+              <div key={u.id} className="flex items-center justify-between p-4 rounded-2xl bg-white/5 border border-white/5 hover:bg-white/10 transition-all">
+                <div className="flex items-center gap-4">
+                  <div className="w-10 h-10 rounded-full bg-gradient-to-br from-gray-700 to-gray-800 flex items-center justify-center text-gray-400 font-bold">
+                    {u.username[0].toUpperCase()}
+                  </div>
+                  <div>
+                    <h4 className="font-bold">{u.username}</h4>
+                    <p className="text-xs text-gray-500">{u.role}</p>
+                  </div>
+                </div>
+                <div className="flex items-center gap-4">
+                  <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${u.status === 'Active' ? 'bg-green-400/10 text-green-400' : 'bg-red-400/10 text-red-400'}`}>
+                    {u.status}
+                  </span>
+                  <button className="text-gray-500 hover:text-white">
+                    <MoreVertical size={16} />
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+
+          <div className="mt-8 p-6 rounded-2xl bg-neon-blue/5 border border-neon-blue/10">
+            <h4 className="font-bold text-neon-blue mb-1">RBAC Controls</h4>
+            <p className="text-xs text-gray-400">Configure role-based access control for your team members. Milestone #4 feature.</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+};
+
 const App: React.FC = () => {
   const [activeTab, setActiveTab] = useState('dashboard');
   const [user, setUser] = useState<User | null>(getAuthUser());
@@ -402,6 +738,7 @@ const App: React.FC = () => {
   const [isLoading, setIsLoading] = useState(false);
   
   const [agents, setAgents] = useState<DashboardAgent[]>([]);
+  const [logs, setLogs] = useState<LogEntry[]>([]);
   const [trafficStats, setTrafficStats] = useState<TrafficStats>({ total_rx: 0, total_tx: 0 });
   const [performanceHistory, setPerformanceHistory] = useState<{ time: string; cpu: number; ram: number }[]>([]);
   const [wsConnected, setWsConnected] = useState(false);
@@ -499,6 +836,7 @@ const App: React.FC = () => {
       ws.onmessage = (event) => {
         try {
           const msg: WSMessage = JSON.parse(event.data);
+          
           if (msg.topic === 'agent_heartbeat') {
             const { agent_id, hardware } = msg.payload;
             
@@ -531,6 +869,13 @@ const App: React.FC = () => {
 
             // Update current bandwidth
             setTotalBandwidth(`${formatBytes(hardware.net_in + hardware.net_out)}/s`);
+          } else if (msg.topic === 'log_update') {
+            const newLog: LogEntry = {
+              id: Math.random().toString(36).substr(2, 9),
+              ...msg.payload,
+              timestamp: new Date().toISOString()
+            };
+            setLogs(prev => [newLog, ...prev].slice(0, 500)); // Keep last 500 logs
           }
         } catch (e) {
           console.error('WS Parse Error:', e);
@@ -608,6 +953,18 @@ const App: React.FC = () => {
             label="Proxies" 
             active={activeTab === 'proxies'} 
             onClick={() => setActiveTab('proxies')} 
+          />
+          <SidebarItem 
+            icon={<FileText size={20} />} 
+            label="Logs" 
+            active={activeTab === 'logs'} 
+            onClick={() => setActiveTab('logs')} 
+          />
+          <SidebarItem 
+            icon={<Terminal size={20} />} 
+            label="Terminal" 
+            active={activeTab === 'terminal'} 
+            onClick={() => setActiveTab('terminal')} 
           />
           <SidebarItem 
             icon={<User size={20} />} 
@@ -901,8 +1258,11 @@ const App: React.FC = () => {
           )}
 
           {activeTab === 'profile' && <ProfilePage user={user!} />}
+          {activeTab === 'logs' && <LogsPage logs={logs} agents={agents} />}
+          {activeTab === 'terminal' && <TerminalPage agents={agents} />}
+          {activeTab === 'settings' && <SettingsPage />}
           
-          {['agents', 'proxies', 'logs', 'settings'].includes(activeTab) && (
+          {['agents', 'proxies'].includes(activeTab) && (
             <div className="flex flex-col items-center justify-center py-20 text-gray-500">
               <div className="w-16 h-16 rounded-2xl bg-white/5 flex items-center justify-center mb-4">
                 <Settings2 size={32} />
