@@ -118,29 +118,35 @@ const getAuthUser = (): User | null => {
   return user ? JSON.parse(user) : null;
 };
 
-// --- Mock Auth Service ---
-const mockLogin = async (username: string, password: string): Promise<{ token: string; user: User }> => {
-  // Simulate API delay
-  await new Promise(resolve => setTimeout(resolve, 800));
+// --- Real Auth Service ---
+const login = async (username: string, password: string): Promise<{ token: string; user: User }> => {
+  const response = await fetch('/api/v1/auth/login', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ username, password })
+  });
   
-  if (username === 'admin' && password === 'admin') {
-    return {
-      token: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJhZG1pbiIsImlhdCI6MTUxNjIzOTAyMn0.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c',
-      user: {
-        username: 'admin',
-        role: 'Administrator',
-        email: 'admin@proxymanager.io',
-        avatar: 'https://ui-avatars.com/api/?name=Admin&background=00f3ff&color=000'
-      }
-    };
+  if (!response.ok) {
+    const errorData = await response.json();
+    throw new Error(errorData.error || 'Invalid username or password');
   }
-  throw new Error('Invalid username or password');
+  
+  const data = await response.json();
+  return {
+    token: data.token,
+    user: {
+      username: data.user.username,
+      role: data.user.role,
+      email: data.user.email || `${data.user.username}@proxymanager.io`,
+      avatar: `https://ui-avatars.com/api/?name=${data.user.username}&background=00f3ff&color=000`
+    }
+  };
 };
 
 // --- Components ---
 const LoginPage: React.FC<{ onLogin: (token: string, user: User) => void }> = ({ onLogin }) => {
-  const [username, setUsername] = useState('admin');
-  const [password, setPassword] = useState('admin');
+  const [username, setUsername] = useState('');
+  const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [showPassword, setShowPassword] = useState(false);
@@ -150,7 +156,7 @@ const LoginPage: React.FC<{ onLogin: (token: string, user: User) => void }> = ({
     setLoading(true);
     setError('');
     try {
-      const { token, user } = await mockLogin(username, password);
+      const { token, user } = await login(username, password);
       onLogin(token, user);
     } catch (err: any) {
       setError(err.message);
@@ -404,6 +410,7 @@ interface LogEntry {
   agent_name: string;
   severity: 'info' | 'warning' | 'error';
   message: string;
+  source: string;
   timestamp: string;
 }
 
@@ -515,13 +522,14 @@ const LogsPage: React.FC<{ logs: LogEntry[]; agents: DashboardAgent[] }> = ({ lo
   );
 };
 
-const TerminalPage: React.FC<{ agents: DashboardAgent[] }> = ({ agents }) => {
+const TerminalPage: React.FC<{ agents: DashboardAgent[], token: string }> = ({ agents, token }) => {
   const [selectedAgent, setSelectedAgent] = useState(agents[0]?.id || '');
   const [history, setHistory] = useState<{ type: 'cmd' | 'out', text: string }[]>([
     { type: 'out', text: 'Welcome to ProxyManager Shell Console v1.0.0' },
     { type: 'out', text: 'Connected to remote agent. Type "help" for list of commands.' },
   ]);
   const [input, setInput] = useState('');
+  const [executing, setExecuting] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -530,34 +538,43 @@ const TerminalPage: React.FC<{ agents: DashboardAgent[] }> = ({ agents }) => {
     }
   }, [history]);
 
-  const handleCommand = (e: React.FormEvent) => {
+  const handleCommand = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!input.trim()) return;
+    if (!input.trim() || executing) return;
 
     const cmd = input.trim();
+    if (cmd.toLowerCase() === 'clear') {
+      setHistory([]);
+      setInput('');
+      return;
+    }
+
     setHistory(prev => [...prev, { type: 'cmd', text: cmd }]);
     setInput('');
+    setExecuting(true);
 
-    // Mock output
-    setTimeout(() => {
-      let output = '';
-      const command = cmd.toLowerCase();
-      if (command === 'help') {
-        output = 'Available commands: help, status, netstat, ps, clear, echo [text]';
-      } else if (command === 'status') {
-        output = `Agent: ${agents.find(a => a.id === selectedAgent)?.hostname || 'Unknown'}\nStatus: Online\nUptime: 14 days, 2:45:12\nCPU Load: 12.4%`;
-      } else if (command === 'netstat') {
-        output = 'Proto  Local Address          Foreign Address        State\ntcp    0.0.0.0:80             0.0.0.0:0              LISTEN\ntcp    0.0.0.0:443            0.0.0.0:0              LISTEN';
-      } else if (command === 'clear') {
-        setHistory([]);
-        return;
-      } else if (command.startsWith('echo ')) {
-        output = cmd.substring(5);
-      } else {
-        output = `sh: command not found: ${cmd}`;
+    try {
+      const response = await fetch(`/api/v1/agents/${selectedAgent}/execute`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({ command: cmd })
+      });
+
+      if (!response.ok) {
+        const err = await response.json();
+        throw new Error(err.error || 'Execution failed');
       }
-      setHistory(prev => [...prev, { type: 'out', text: output }]);
-    }, 100);
+
+      const data = await response.json();
+      setHistory(prev => [...prev, { type: 'out', text: data.message || 'Command queued for execution' }]);
+    } catch (err: any) {
+      setHistory(prev => [...prev, { type: 'out', text: `Error: ${err.message}` }]);
+    } finally {
+      setExecuting(false);
+    }
   };
 
   return (
@@ -869,13 +886,25 @@ const App: React.FC = () => {
 
             // Update current bandwidth
             setTotalBandwidth(`${formatBytes(hardware.net_in + hardware.net_out)}/s`);
-          } else if (msg.topic === 'log_update') {
-            const newLog: LogEntry = {
-              id: Math.random().toString(36).substr(2, 9),
-              ...msg.payload,
-              timestamp: new Date().toISOString()
-            };
-            setLogs(prev => [newLog, ...prev].slice(0, 500)); // Keep last 500 logs
+          } else if (msg.topic === 'agent_log') {
+            const { agent_id, log_level, message, timestamp, source } = msg.payload;
+            
+            setLogs(prev => {
+              // Find agent name
+              const agent = agents.find(a => a.id === agent_id);
+              const agentName = agent ? agent.hostname : 'Unknown Agent';
+              
+              const newLog: LogEntry = {
+                id: Math.random().toString(36).substr(2, 9),
+                agent_id: agent_id,
+                agent_name: agentName,
+                severity: (log_level?.toLowerCase() || 'info') as any,
+                message: message,
+                source: source || 'system',
+                timestamp: timestamp || new Date().toISOString()
+              };
+              return [newLog, ...prev].slice(0, 500); // Keep last 500 logs
+            });
           }
         } catch (e) {
           console.error('WS Parse Error:', e);
@@ -1259,7 +1288,7 @@ const App: React.FC = () => {
 
           {activeTab === 'profile' && <ProfilePage user={user!} />}
           {activeTab === 'logs' && <LogsPage logs={logs} agents={agents} />}
-          {activeTab === 'terminal' && <TerminalPage agents={agents} />}
+          {activeTab === 'terminal' && <TerminalPage agents={agents} token={token!} />}
           {activeTab === 'settings' && <SettingsPage />}
           
           {['agents', 'proxies'].includes(activeTab) && (
