@@ -32,14 +32,17 @@ func main() {
 	// Start Offline Agent Monitor
 	go dashboard.StartAgentMonitor(database)
 
-	// Start gRPC Server in a goroutine
-	go startGRPCServer(database)
+	// Create a single API handler to be shared
+	apiHandler := api.NewHandler(database)
 
-	// Start Dashboard REST API
-	startDashboardServer(database)
+	// Start gRPC Server in a goroutine
+	go startGRPCServer(apiHandler)
+
+	// Start Dashboard REST API, passing the API handler
+	startDashboardServer(database, apiHandler)
 }
 
-func startGRPCServer(database *db.DB) {
+func startGRPCServer(apiHandler *api.Handler) {
 	grpcPort := os.Getenv("GRPC_PORT")
 	if grpcPort == "" {
 		grpcPort = "50051"
@@ -51,7 +54,7 @@ func startGRPCServer(database *db.DB) {
 	}
 
 	s := grpc.NewServer()
-	api.RegisterAgentServiceServer(s, api.NewHandler(database))
+	api.RegisterAgentServiceServer(s, apiHandler)
 
 	log.Printf("gRPC server listening at %v", lis.Addr())
 	if err := s.Serve(lis); err != nil {
@@ -59,9 +62,9 @@ func startGRPCServer(database *db.DB) {
 	}
 }
 
-func startDashboardServer(database *db.DB) {
+func startDashboardServer(database *db.DB, apiHandler *api.Handler) {
 	r := gin.Default()
-	dashboard.SetupRoutes(r, database)
+	dashboard.SetupRoutes(r, database, apiHandler)
 
 	dashboardPort := os.Getenv("DASHBOARD_PORT")
 	if dashboardPort == "" {

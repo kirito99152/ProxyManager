@@ -113,3 +113,20 @@ func (h *Handler) SendCommand(agentID string, action string, payload string) err
 	ch <- &Command{Action: action, Payload: payload}
 	return nil
 }
+
+// ForwardLog receives a log entry from an agent, saves it, and broadcasts it.
+func (h *Handler) ForwardLog(ctx context.Context, req *LogEntry) (*LogResponse, error) {
+	// Save log to the database
+	_, err := h.database.Exec("INSERT INTO agent_logs (agent_id, log_level, message, timestamp, source) VALUES (?, ?, ?, ?, ?)",
+		req.AgentId, req.LogLevel, req.Message, req.Timestamp, req.Source)
+	if err != nil {
+		log.Printf("Failed to insert agent log: %v", err)
+		return &LogResponse{Success: false}, err
+	}
+
+	// Broadcast the log to the dashboard via WebSocket
+	dashboard.BroadcastMessage("agent_log", req)
+
+	return &LogResponse{Success: true}, nil
+}
+
