@@ -275,6 +275,8 @@ type HardwareStats struct {
 	RamTotal      uint64                 `protobuf:"varint,2,opt,name=ram_total,json=ramTotal,proto3" json:"ram_total,omitempty"`
 	RamUsed       uint64                 `protobuf:"varint,3,opt,name=ram_used,json=ramUsed,proto3" json:"ram_used,omitempty"`
 	DiskFree      uint64                 `protobuf:"varint,4,opt,name=disk_free,json=diskFree,proto3" json:"disk_free,omitempty"`
+	NetIn         uint64                 `protobuf:"varint,5,opt,name=net_in,json=netIn,proto3" json:"net_in,omitempty"`    // Bytes received since last report
+	NetOut        uint64                 `protobuf:"varint,6,opt,name=net_out,json=netOut,proto3" json:"net_out,omitempty"` // Bytes sent since last report
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -333,6 +335,20 @@ func (x *HardwareStats) GetRamUsed() uint64 {
 func (x *HardwareStats) GetDiskFree() uint64 {
 	if x != nil {
 		return x.DiskFree
+	}
+	return 0
+}
+
+func (x *HardwareStats) GetNetIn() uint64 {
+	if x != nil {
+		return x.NetIn
+	}
+	return 0
+}
+
+func (x *HardwareStats) GetNetOut() uint64 {
+	if x != nil {
+		return x.NetOut
 	}
 	return 0
 }
@@ -516,12 +532,14 @@ const file_proto_agent_proto_rawDesc = "" +
 	"open_ports\x18\x03 \x03(\v2\r.api.PortInfoR\topenPorts\"D\n" +
 	"\x0eReportResponse\x12\x18\n" +
 	"\asuccess\x18\x01 \x01(\bR\asuccess\x12\x18\n" +
-	"\amessage\x18\x02 \x01(\tR\amessage\"\x81\x01\n" +
+	"\amessage\x18\x02 \x01(\tR\amessage\"\xb1\x01\n" +
 	"\rHardwareStats\x12\x1b\n" +
 	"\tcpu_usage\x18\x01 \x01(\x01R\bcpuUsage\x12\x1b\n" +
 	"\tram_total\x18\x02 \x01(\x04R\bramTotal\x12\x19\n" +
 	"\bram_used\x18\x03 \x01(\x04R\aramUsed\x12\x1b\n" +
-	"\tdisk_free\x18\x04 \x01(\x04R\bdiskFree\"]\n" +
+	"\tdisk_free\x18\x04 \x01(\x04R\bdiskFree\x12\x15\n" +
+	"\x06net_in\x18\x05 \x01(\x04R\x05netIn\x12\x17\n" +
+	"\anet_out\x18\x06 \x01(\x04R\x06netOut\"]\n" +
 	"\bPortInfo\x12\x12\n" +
 	"\x04port\x18\x01 \x01(\x05R\x04port\x12\x1a\n" +
 	"\bprotocol\x18\x02 \x01(\tR\bprotocol\x12!\n" +
