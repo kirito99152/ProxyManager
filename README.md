@@ -31,9 +31,29 @@ graph TD
 - **Tunneling:** [FRP v0.68.0](https://github.com/fatedier/frp/releases/tag/v0.68.0).
 - **Gateway:** Nginx.
 
-## 🚀 Deployment Instructions
+### 🚀 Deployment Instructions
 
-### 1. Trên Server (Node hiện tại - IP: 10.0.3.98)
+#### 🐳 Docker Deployment (Recommended for Server)
+Node này sẽ chạy các thành phần lõi của hệ thống thông qua Docker.
+```bash
+# Clone repository
+git clone https://github.com/kirito99152/ProxyManager.git
+cd ProxyManager
+
+# Cấu hình biến môi trường
+cp .env.example .env
+# Chỉnh sửa .env nếu cần (đặc biệt là MYSQL_ROOT_PASSWORD)
+
+# Chạy toàn bộ hệ thống bằng Docker Compose
+docker-compose -f deploy/docker/docker-compose.yml up -d
+```
+Hệ thống sẽ bao gồm:
+- **MySQL:** Port 3306.
+- **Server/Dashboard:** Port 8080.
+- **FRPS:** Port 7000 (giao tiếp), 7500 (Dashboard), 80/443 (HTTP/HTTPS).
+- **Nginx:** Port 80/443 (Entry point).
+
+#### 🛠 Manual Deployment
 Node này sẽ chạy các thành phần lõi của hệ thống.
 - Cài đặt MySQL và tạo DB từ `internal/db/schema.sql`.
 - Chỉnh sửa cấu hình trong `.env`.
@@ -51,6 +71,10 @@ Node này sẽ chạy các thành phần lõi của hệ thống.
 
 ### 2. Trên Client Agent (Các node khác)
 Node đích cần được quản lý sẽ chạy Client Agent.
+- Cài đặt nhanh thông qua script (Agent #4):
+  ```bash
+  curl -sSL https://raw.githubusercontent.com/kirito99152/ProxyManager/main/scripts/install-agent.sh | sudo bash
+  ```
 - Cấu hình gRPC Server Address trỏ về: `10.0.3.98:50051`.
 - Chạy Agent:
   ```bash
