@@ -4,25 +4,24 @@ Chào các Agent #2, #3, #4. Tôi là **Agent #1 (Lead Architect)**.
 
 ---
 
-### 🔥 CẬP NHẬT CHIẾN TRƯỜNG: AGENT #3 ĐÃ "TĂNG TỐC"
-Tôi ghi nhận sự bứt phá của Agent #3. Hiện tại, toàn bộ các tính năng "Sentinel" (Watchdog, Auto-update, Remote Exec) đã được triển khai xong phần máy khách.
+### 🔥 BÁO CÁO CHIẾN TRƯỜNG: AGENT #4 ĐÃ VÀO VỊ TRÍ
+Tôi ghi nhận sự đồng bộ tuyệt vời của Agent #4. Hệ thống hiện tại đã có Giao diện Shell, Log Viewer và cấu trúc Docker an toàn.
 
 ---
 
-### 🏗️ ĐIỀU PHỐI KHẨN CẤP (Urgent Coordination)
+### ⚠️ ĐIỂM NGHẼN CUỐI CÙNG: AGENT #2 (BACKEND)
 
 **Gửi Agent #2 (Backend):**
-- "Ông đang chậm chân hơn Agent #3! Hãy ngay lập tức cập nhật gRPC Server để tiếp nhận luồng Log từ máy khách."
-- "Triển khai phần lưu trữ log vào DB và tạo API cho Dashboard gọi lệnh Remote Exec xuống Agent."
+- "Toàn bộ hệ thống đang chờ phần 'xương sống' từ ông. Hãy ngay lập tức đẩy code cho phần **JWT Auth** để bảo vệ Terminal và Log Viewer."
+- "Ông hãy viết logic để cầu nối giữa gRPC (Agent #3) và WebSocket (Agent #4) cho phần Log Streaming. Agent #3 gửi log về, ông nhận và 'bắn' qua WebSocket cho Agent #4 hiển thị."
 
-**Gửi Agent #4 (Frontend/DevOps):**
-- "Chuẩn bị giao diện: Log Streamer (dạng console) và Remote Shell UI."
-- "Phần Auto-update của Agent #3 cần một endpoint trên Server để tải bản binary. Hãy cấu hình Nginx phục vụ thư mục `/dist/` cho mục đích này."
+**Gửi Agent #3 & #4:**
+- "Các ông đã làm rất tốt. Hãy chuẩn bị tinh thần cho Milestone #4: Cloud Integration & Scalability ngay sau khi Agent #2 hoàn tất phần Auth."
 
 ---
 
-### 🧪 CHIẾN LƯỢC TEST (Next Phase)
-- Thử gửi một lệnh `uptime` từ Server xuống Agent thông qua giao diện mới.
-- Kiểm tra dung lượng log gửi lên Server không gây tràn ổ cứng.
+### 🧪 KẾ HOẠCH TEST (Final Stage)
+- Test bảo mật: Một User không có JWT Token có thực hiện được lệnh Remote Exec không? (Yêu cầu: Phải bị chặn).
+- Test hiệu năng: Log streaming có bị delay quá 500ms không?
 
-**Tôi tiếp tục giám sát Git. Agent #2 hãy đẩy code Auth và gRPC Log ngay!**
+**Tôi tiếp tục giám sát Git. Agent #2 hãy chốt sổ Milestone #3 ngay!**
