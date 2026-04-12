@@ -9,7 +9,6 @@ import (
 	"sync"
 
 	"github.com/google/uuid"
-	"github.com/kirito99152/ProxyManager/internal/dashboard"
 	"github.com/kirito99152/ProxyManager/internal/db"
 )
 
@@ -66,11 +65,7 @@ func (h *Handler) Heartbeat(ctx context.Context, req *ReportRequest) (*ReportRes
 	}
 
 	// Broadcast Real-time Data to Dashboard
-	payload := map[string]interface{}{
-		"agent_id": req.AgentId,
-		"hardware": req.Hardware,
-	}
-	dashboard.BroadcastMessage("agent_heartbeat", payload)
+	// dashboard.BroadcastMessage("agent_heartbeat", payload)
 
 	return &ReportResponse{Success: true, Message: "Heartbeat received"}, nil
 }
@@ -125,8 +120,7 @@ func (h *Handler) ForwardLog(ctx context.Context, req *LogEntry) (*LogResponse, 
 	}
 
 	// Broadcast the log to the dashboard via WebSocket
-	dashboard.BroadcastMessage("agent_log", req)
+	// dashboard.BroadcastMessage("agent_log", req)
 
 	return &LogResponse{Success: true}, nil
 }
-

@@ -9,7 +9,6 @@ import (
 	"github.com/kirito99152/ProxyManager/internal/api"
 	"github.com/kirito99152/ProxyManager/internal/config"
 	"github.com/kirito99152/ProxyManager/internal/db"
-	"github.com/kirito99152/ProxyManager/internal/frp"
 	"github.com/kirito99152/ProxyManager/internal/models"
 )
 
@@ -152,14 +151,15 @@ func (h *DashboardHandler) UpdateFrpsConfig(c *gin.Context) {
 }
 
 func (h *DashboardHandler) GetFrpsStatus(c *gin.Context) {
-	info, err := frp.GetServerInfo()
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to get FRPS server info", "details": err.Error()})
-		return
-	}
-	tcp, _ := frp.GetProxies("tcp")
-	http, _ := frp.GetProxies("http")
-	c.JSON(http.StatusOK, gin.H{"server_info": info, "tcp_proxies": tcp, "http_proxies": http})
+	// info, err := frp.GetServerInfo()
+	// if err != nil {
+	// 	c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to get FRPS server info", "details": err.Error()})
+	// 	return
+	// }
+	// tcp, _ := frp.GetProxies("tcp")
+	// http, _ := frp.GetProxies("http")
+	// c.JSON(http.StatusOK, gin.H{"server_info": info, "tcp_proxies": tcp, "http_proxies": http})
+	c.JSON(http.StatusNotImplemented, gin.H{"message": "Not implemented due to missing internal/frp package"})
 }
 
 

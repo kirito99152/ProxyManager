@@ -44,6 +44,13 @@ type Agent struct {
 }
 
 func main() {
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("Recovered from panic: %v", r)
+			time.Sleep(5 * time.Second)
+			main() // Auto-restart in same process (fallback)
+		}
+	}()
 	serverAddr := os.Getenv("SERVER_ADDR")
 	if serverAddr == "" {
 		serverAddr = "10.0.3.98:50051"
