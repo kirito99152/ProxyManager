@@ -14,7 +14,7 @@ RUN npm install
 COPY dashboard/ .
 RUN npm run build
 
-# Stage 3: Final Image
+# Stage 3: Final Image (Pure API Server)
 FROM alpine:latest
 WORKDIR /
 COPY --from=go-builder /server /server
