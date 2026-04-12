@@ -6,14 +6,14 @@ Hệ thống quản lý tập trung Fast Reverse Proxy (FRP) v0.68.0 hỗ trợ 
 
 ```mermaid
 graph TD
-    subgraph "Control Plane (Server)"
+    subgraph "Control Plane (Server) - IP: 10.0.3.98"
         Dashboard[Go Dashboard & API]
         MySQL[(MySQL DB)]
         FRPS[FRP Server v0.68.0]
         Nginx[Nginx Gateway]
     end
 
-    subgraph "Edge Node (Client)"
+    subgraph "Edge Node (Client) - Remote Nodes"
         Agent[Client Agent - Go]
         FRPC[FRP Client v0.68.0]
     end
@@ -31,26 +31,31 @@ graph TD
 - **Tunneling:** [FRP v0.68.0](https://github.com/fatedier/frp/releases/tag/v0.68.0).
 - **Gateway:** Nginx.
 
-## 🚀 Quick Start (Cho Agent/Developer)
+## 🚀 Deployment Instructions
 
-1. **Pull code & Chuẩn bị môi trường:**
-   ```bash
-   git pull origin main
-   make install-deps # Cài protoc, go (Ubuntu)
-   ```
+### 1. Trên Server (Node hiện tại - IP: 10.0.3.98)
+Node này sẽ chạy các thành phần lõi của hệ thống.
+- Cài đặt MySQL và tạo DB từ `internal/db/schema.sql`.
+- Chỉnh sửa cấu hình trong `.env`.
+- Build và chạy Server:
+  ```bash
+  make proto
+  make build-server
+  ./bin/server
+  ```
+- Chạy FRPS:
+  ```bash
+  make download-frp
+  ./frps -c configs/frps.yaml
+  ```
 
-2. **Khởi tạo Database:**
-   Sử dụng file `internal/db/schema.sql` để tạo database MySQL.
-
-3. **Biên dịch gRPC:**
-   ```bash
-   make proto
-   ```
-
-4. **Tải FRP v0.68.0:**
-   ```bash
-   make download-frp
-   ```
+### 2. Trên Client Agent (Các node khác)
+Node đích cần được quản lý sẽ chạy Client Agent.
+- Cấu hình gRPC Server Address trỏ về: `10.0.3.98:50051`.
+- Chạy Agent:
+  ```bash
+  ./bin/agent --server 10.0.3.98:50051
+  ```
 
 ## 📋 Task List
 Xem chi tiết nhiệm vụ của từng Agent tại [TASKS.md](TASKS.md).
