@@ -35,20 +35,15 @@ if command -v ufw > /dev/null; then
     echo -e "${GREEN}UFW configured.${NC}"
 fi
 
-# 3. Download FRP v0.68.0
-echo "Downloading FRP v0.68.0..."
-TEMP_DIR=$(mktemp -d)
-cd $TEMP_DIR
-wget -q https://github.com/fatedier/frp/releases/download/v${FRP_VERSION}/frp_${FRP_VERSION}_linux_amd64.tar.gz
-tar -xzf frp_${FRP_VERSION}_linux_amd64.tar.gz
-cp frp_${FRP_VERSION}_linux_amd64/frpc $INSTALL_DIR/
-rm -rf $TEMP_DIR
+# 3. Download FRP v0.68.0 from local server
+echo "Downloading FRP v0.68.0 from ProxyManager Server..."
+wget -q http://160.191.50.208:8000/downloads/frpc-linux-amd64 -O $INSTALL_DIR/frpc
+chmod +x $INSTALL_DIR/frpc
 
-# 4. Agent Binary (Assuming it's available or built)
-# In production, this would curl from the Server's /api/v1/install/script endpoint
+# 4. Agent Binary
 echo "Setting up Agent binary..."
-# touch $INSTALL_DIR/agent
-# chmod +x $INSTALL_DIR/agent
+wget -q http://160.191.50.208:8000/downloads/agent-linux-amd64 -O $INSTALL_DIR/agent
+chmod +x $INSTALL_DIR/agent
 
 # 5. Setup Systemd Service for Agent (Auto-restart enabled)
 cat <<EOF > $SYSTEMD_DIR/$AGENT_NAME.service
@@ -60,7 +55,7 @@ After=network.target
 Type=simple
 User=root
 WorkingDirectory=$INSTALL_DIR
-ExecStart=$INSTALL_DIR/agent -server 10.0.3.98:50051
+ExecStart=$INSTALL_DIR/agent -server 160.191.50.208:50051
 Restart=always
 RestartSec=10
 StartLimitIntervalSec=0

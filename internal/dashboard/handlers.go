@@ -7,6 +7,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"regexp"
 	"strconv"
 	"strings"
 
@@ -67,13 +68,37 @@ func (h *DashboardHandler) ExecuteCommand(c *gin.Context) {
 	}
 
 	// Use the shared apiHandler to send a command
-	err := h.apiHandler.SendCommand(agentID, "EXEC", req.Command)
+	err := h.apiHandler.SendCommand(agentID, "REMOTE_EXEC", req.Command)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to send command to agent: " + err.Error()})
 		return
 	}
 
 	c.JSON(http.StatusOK, gin.H{"message": "Command queued for execution"})
+}
+
+func (h *DashboardHandler) UpgradeAgent(c *gin.Context) {
+	agentID := c.Param("id")
+	
+	serverIP := os.Getenv("SERVER_IP")
+	if serverIP == "" {
+		serverIP = "localhost" // Fallback
+	}
+	
+	dashboardPort := os.Getenv("DASHBOARD_PORT")
+	if dashboardPort == "" {
+		dashboardPort = "8000"
+	}
+
+	url := fmt.Sprintf("http://%s:%s/downloads/agent-linux-amd64", serverIP, dashboardPort)
+	
+	err := h.apiHandler.SendCommand(agentID, "UPGRADE_AGENT", url)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to send upgrade command: " + err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"message": "Upgrade command sent to agent"})
 }
 
 // --- Proxy Handlers ---
@@ -96,7 +121,45 @@ func (h *DashboardHandler) CreateProxy(c *gin.Context) {
 		return
 	}
 
-	// Validation: Ensure domain is unique for HTTP/HTTPS
+	// 1. Fetch the agent to get its hostname
+	var agent models.Agent
+	err := h.database.Get(&agent, "SELECT hostname FROM agents WHERE id = ?", proxy.AgentID)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Agent not found"})
+		return
+	}
+
+	// 2. Validate Proxy Name format: hostname_<user_input>
+	expectedPrefix := agent.Hostname + "_"
+	if !strings.HasPrefix(proxy.Name, expectedPrefix) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("Proxy name must start with '%s'", expectedPrefix)})
+		return
+	}
+	suffix := strings.TrimPrefix(proxy.Name, expectedPrefix)
+	if suffix == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Proxy name suffix cannot be empty"})
+		return
+	}
+	// Regex for lowercase alphanumeric, no accents/spaces
+	matched, _ := regexp.MatchString(`^[a-z0-9-]+$`, suffix)
+	if !matched {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Proxy name suffix must be lowercase alphanumeric (can include hyphens, no spaces or accents)"})
+		return
+	}
+
+	// 3. Ensure Proxy Name is unique globally
+	var nameCount int
+	err = h.database.Get(&nameCount, "SELECT COUNT(*) FROM proxies WHERE name = ?", proxy.Name)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Database error checking name uniqueness"})
+		return
+	}
+	if nameCount > 0 {
+		c.JSON(http.StatusConflict, gin.H{"error": "Proxy name already exists"})
+		return
+	}
+
+	// 4. Validation for Domain / Port Uniqueness
 	if proxy.ProxyType == "http" || proxy.ProxyType == "https" {
 		if proxy.CustomDomain == nil || *proxy.CustomDomain == "" {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "Custom domain is required for HTTP/HTTPS proxies"})
@@ -114,14 +177,13 @@ func (h *DashboardHandler) CreateProxy(c *gin.Context) {
 			return
 		}
 	} else if proxy.ProxyType == "tcp" || proxy.ProxyType == "udp" {
-		// Validation: Ensure remote port is unique for TCP/UDP
 		if proxy.RemotePort == nil || *proxy.RemotePort == 0 {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "Remote port is required for TCP/UDP proxies"})
 			return
 		}
 
 		var count int
-		err := h.database.Get(&count, "SELECT COUNT(*) FROM proxies WHERE remote_port = ? AND (proxy_type = 'tcp' OR proxy_type = 'udp')", proxy.RemotePort)
+		err := h.database.Get(&count, "SELECT COUNT(*) FROM proxies WHERE remote_port = ?", proxy.RemotePort)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "Database error checking port uniqueness"})
 			return
@@ -132,7 +194,11 @@ func (h *DashboardHandler) CreateProxy(c *gin.Context) {
 		}
 	}
 
-	result, err := h.database.NamedExec("INSERT INTO proxies (agent_id, name, proxy_type, local_port, remote_port, custom_domain, status) VALUES (:agent_id, :name, :proxy_type, :local_port, :remote_port, :custom_domain, :status)", &proxy)
+	if proxy.LocalIP == "" {
+		proxy.LocalIP = "127.0.0.1"
+	}
+
+	result, err := h.database.NamedExec("INSERT INTO proxies (agent_id, name, proxy_type, local_ip, local_port, remote_port, custom_domain, status) VALUES (:agent_id, :name, :proxy_type, :local_ip, :local_port, :remote_port, :custom_domain, :status)", &proxy)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create proxy: " + err.Error()})
 		return
@@ -186,7 +252,11 @@ func (h *DashboardHandler) UpdateProxy(c *gin.Context) {
 		}
 	}
 
-	_, err := h.database.NamedExec("UPDATE proxies SET name=:name, proxy_type=:proxy_type, local_port=:local_port, remote_port=:remote_port, custom_domain=:custom_domain, status=:status WHERE id=:id", &proxy)
+	if proxy.LocalIP == "" {
+		proxy.LocalIP = "127.0.0.1"
+	}
+
+	_, err := h.database.NamedExec("UPDATE proxies SET name=:name, proxy_type=:proxy_type, local_ip=:local_ip, local_port=:local_port, remote_port=:remote_port, custom_domain=:custom_domain, status=:status WHERE id=:id", &proxy)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update proxy: " + err.Error()})
 		return
@@ -223,7 +293,7 @@ func (h *DashboardHandler) DeleteProxy(c *gin.Context) {
 // syncAgentFRPConfig generates frpc config and sends it to the agent
 func (h *DashboardHandler) syncAgentFRPConfig(agentID string) {
 	var proxies []models.Proxy
-	err := h.database.Select(&proxies, "SELECT * FROM proxies WHERE agent_id = ? AND status = 'active'", agentID)
+	err := h.database.Select(&proxies, "SELECT * FROM proxies WHERE agent_id = ?", agentID)
 	if err != nil {
 		log.Printf("SyncFRP Error: Failed to fetch proxies: %v", err)
 		return
@@ -237,11 +307,19 @@ func (h *DashboardHandler) syncAgentFRPConfig(agentID string) {
 	config := fmt.Sprintf("serverAddr: \"%s\"\nserverPort: %s\nauth:\n  token: \"%s\"\n\nproxies:\n", serverIP, frpPort, frpToken)
 
 	for _, p := range proxies {
-		config += fmt.Sprintf("  - name: \"%s\"\n    type: \"%s\"\n", p.Name, p.ProxyType)
+		config += fmt.Sprintf("  - name: \"%s\"\n    type: \"%s\"\n    localIP: \"%s\"\n", p.Name, p.ProxyType, p.LocalIP)
 		if p.ProxyType == "http" || p.ProxyType == "https" {
-			config += fmt.Sprintf("    localPort: %d\n    customDomains: [\"%s\"]\n", p.LocalPort, p.CustomDomain)
+			domain := ""
+			if p.CustomDomain != nil {
+				domain = *p.CustomDomain
+			}
+			config += fmt.Sprintf("    localPort: %d\n    customDomains: [\"%s\"]\n", p.LocalPort, domain)
 		} else {
-			config += fmt.Sprintf("    localPort: %d\n    remotePort: %d\n", p.LocalPort, p.RemotePort)
+			remotePort := 0
+			if p.RemotePort != nil {
+				remotePort = *p.RemotePort
+			}
+			config += fmt.Sprintf("    localPort: %d\n    remotePort: %d\n", p.LocalPort, remotePort)
 		}
 	}
 
@@ -495,7 +573,6 @@ set -euo pipefail
 BASE_URL=%q
 WORKDIR="/opt/proxymanager"
 SERVICE_NAME="proxymanager-agent"
-FRP_VERSION="0.68.0"
 SERVER_ADDR=%q
 AGENT_AUTH_TOKEN=%q
 
@@ -508,20 +585,17 @@ ARCH="$(uname -m)"
 case "$ARCH" in
   x86_64|amd64)
     AGENT_FILE="agent-linux-amd64"
-    FRP_ARCH="amd64"
+    FRP_FILE="frpc-linux-amd64"
     ;;
   aarch64|arm64)
     AGENT_FILE="agent-linux-arm64"
-    FRP_ARCH="arm64"
+    FRP_FILE="frpc-linux-arm64"
     ;;
   *)
     echo "Unsupported architecture: $ARCH"
     exit 1
     ;;
 esac
-
-TMPDIR="$(mktemp -d)"
-trap 'rm -rf "$TMPDIR"' EXIT
 
 if systemctl list-unit-files | grep -q "^${SERVICE_NAME}.service"; then
   echo "Stopping existing agent service..."
@@ -541,9 +615,7 @@ curl -fsSL "$BASE_URL/downloads/$AGENT_FILE" -o agent
 chmod +x agent
 
 echo "Downloading frpc..."
-curl -fsSL "https://github.com/fatedier/frp/releases/download/v${FRP_VERSION}/frp_${FRP_VERSION}_linux_${FRP_ARCH}.tar.gz" -o "$TMPDIR/frp.tar.gz"
-tar -xzf "$TMPDIR/frp.tar.gz" -C "$TMPDIR"
-cp "$TMPDIR/frp_${FRP_VERSION}_linux_${FRP_ARCH}/frpc" "$WORKDIR/frpc"
+curl -fsSL "$BASE_URL/downloads/$FRP_FILE" -o frpc
 chmod +x frpc
 
 cat > "$WORKDIR/agent.env" <<EOF
@@ -551,7 +623,7 @@ SERVER_ADDR=%s
 AGENT_AUTH_TOKEN=%s
 EOF
 
-cat > /etc/systemd/system/${SERVICE_NAME}.service <<'EOF'
+cat > /etc/systemd/system/${SERVICE_NAME}.service <<EOF
 [Unit]
 Description=ProxyManager Agent
 After=network-online.target
@@ -561,8 +633,7 @@ Wants=network-online.target
 Type=simple
 User=root
 WorkingDirectory=/opt/proxymanager
-EnvironmentFile=/opt/proxymanager/agent.env
-ExecStart=/opt/proxymanager/agent
+ExecStart=/opt/proxymanager/agent -server "${SERVER_ADDR}" -token "${AGENT_AUTH_TOKEN}"
 Restart=always
 RestartSec=5
 
@@ -585,26 +656,32 @@ func buildWindowsInstallScript(c *gin.Context) string {
 $BaseUrl = %q
 $WorkDir = "C:\ProxyManager"
 $ServiceName = "ProxyManagerAgent"
-$FrpVersion = "0.68.0"
 $ServerAddr = %q
 $AgentToken = %q
 
 if (Get-Service -Name $ServiceName -ErrorAction SilentlyContinue) {
   Stop-Service -Name $ServiceName -Force -ErrorAction SilentlyContinue
-  sc.exe delete $ServiceName | Out-Null
+  # sc.exe delete $ServiceName | Out-Null
   Start-Sleep -Seconds 2
 }
 
 if (Test-Path $WorkDir) {
-  Remove-Item -Path $WorkDir -Recurse -Force
+  # Remove-Item -Path $WorkDir -Recurse -Force
+} else {
+  New-Item -ItemType Directory -Force -Path $WorkDir | Out-Null
 }
 
-New-Item -ItemType Directory -Force -Path $WorkDir | Out-Null
 Set-Location $WorkDir
 
 switch ($env:PROCESSOR_ARCHITECTURE) {
-  "AMD64" { $AgentFile = "agent-windows-amd64.exe"; $FrpArch = "amd64" }
-  "ARM64" { $AgentFile = "agent-windows-arm64.exe"; $FrpArch = "arm64" }
+  "AMD64" { 
+    $AgentFile = "agent-windows-amd64.exe"
+    $FrpFile = "frpc-windows-amd64.exe"
+  }
+  "ARM64" { 
+    $AgentFile = "agent-windows-arm64.exe"
+    $FrpFile = "frpc-windows-arm64.exe"
+  }
   default { throw "Unsupported architecture: $env:PROCESSOR_ARCHITECTURE" }
 }
 
@@ -612,16 +689,16 @@ Write-Host "Downloading agent binary..."
 curl.exe -fsSL "$BaseUrl/downloads/$AgentFile" -o "$WorkDir\agent.exe"
 
 Write-Host "Downloading frpc..."
-$frpZip = "$env:TEMP\frp.zip"
-curl.exe -fsSL "https://github.com/fatedier/frp/releases/download/v$FrpVersion/frp_${FrpVersion}_windows_${FrpArch}.zip" -o $frpZip
-Expand-Archive -Path $frpZip -DestinationPath "$env:TEMP\proxymanager-frp" -Force
-Copy-Item "$env:TEMP\proxymanager-frp\frp_${FrpVersion}_windows_${FrpArch}\frpc.exe" "$WorkDir\frpc.exe" -Force
+curl.exe -fsSL "$BaseUrl/downloads/$FrpFile" -o "$WorkDir\frpc.exe"
 
 [Environment]::SetEnvironmentVariable("SERVER_ADDR", $ServerAddr, "Machine")
 [Environment]::SetEnvironmentVariable("AGENT_AUTH_TOKEN", $AgentToken, "Machine")
 
-$binPath = "C:\Windows\System32\cmd.exe /c set SERVER_ADDR=$ServerAddr && set AGENT_AUTH_TOKEN=$AgentToken && cd /d $WorkDir && agent.exe"
-New-Service -Name $ServiceName -BinaryPathName $binPath -DisplayName "ProxyManager Agent" -StartupType Automatic | Out-Null
+if (-not (Get-Service -Name $ServiceName -ErrorAction SilentlyContinue)) {
+    $binPath = "C:\Windows\System32\cmd.exe /c set SERVER_ADDR=$ServerAddr && set AGENT_AUTH_TOKEN=$AgentToken && cd /d $WorkDir && agent.exe"
+    New-Service -Name $ServiceName -BinaryPathName $binPath -DisplayName "ProxyManager Agent" -StartupType Automatic | Out-Null
+}
+
 Start-Service -Name $ServiceName
 
 Write-Host "ProxyManager agent installed successfully."

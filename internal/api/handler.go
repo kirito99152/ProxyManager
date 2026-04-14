@@ -64,7 +64,16 @@ func (h *Handler) Register(ctx context.Context, req *RegisterRequest) (*Register
 	}
 
 	agentID := stableAgentID(req)
-	log.Printf("Registering agent: %s (%s) as %s", req.Hostname, req.PrivateIp, agentID)
+	
+	// Nếu hostname có chứa dấu #, phần sau dấu # là Machine ID (bền vững nhất)
+	hostname := req.Hostname
+	if strings.Contains(req.Hostname, "#") {
+		parts := strings.Split(req.Hostname, "#")
+		hostname = parts[0]
+		agentID = parts[1] // Dùng trực tiếp Machine ID
+	}
+	
+	log.Printf("Registering agent: %s (%s) as %s", hostname, req.PrivateIp, agentID)
 
 	_, err := h.database.Exec(`
 		INSERT INTO agents (id, hostname, os, private_ip, status, last_heartbeat)
@@ -75,7 +84,7 @@ func (h *Handler) Register(ctx context.Context, req *RegisterRequest) (*Register
 			private_ip = VALUES(private_ip),
 			status = 'online',
 			last_heartbeat = NOW()
-	`, agentID, req.Hostname, req.Os, req.PrivateIp)
+	`, agentID, hostname, req.Os, req.PrivateIp)
 	if err != nil {
 		return nil, fmt.Errorf("failed to register agent: %w", err)
 	}
@@ -167,10 +176,16 @@ func (h *Handler) CommandStream(req *AgentID, stream AgentService_CommandStreamS
 func (h *Handler) SendCommand(agentID string, action string, payload string) error {
 	h.mu.RLock()
 	ch, ok := h.clients[agentID]
+	
+	// Debug connected clients
+	var connected []string
+	for k := range h.clients {
+		connected = append(connected, k)
+	}
 	h.mu.RUnlock()
 
 	if !ok {
-		return fmt.Errorf("agent %s not connected", agentID)
+		return fmt.Errorf("agent %s not connected (currently connected: %v)", agentID, connected)
 	}
 
 	ch <- &Command{Action: action, Payload: payload}
@@ -180,8 +195,10 @@ func (h *Handler) SendCommand(agentID string, action string, payload string) err
 // ForwardLog receives a log entry from an agent, saves it, and broadcasts it.
 func (h *Handler) ForwardLog(ctx context.Context, req *LogEntry) (*LogResponse, error) {
 	if err := h.authenticate(ctx); err != nil {
+		log.Printf("ForwardLog Auth Failed for Agent %s: %v", req.AgentId, err)
 		return nil, err
 	}
+	log.Printf("Received ForwardLog from %s: Source=%s, Msg=%s", req.AgentId, req.Source, req.Message)
 
 	// Save log to the database
 	_, err := h.database.Exec("INSERT INTO agent_logs (agent_id, log_level, message, timestamp, source) VALUES (?, ?, ?, ?, ?)",
@@ -192,7 +209,18 @@ func (h *Handler) ForwardLog(ctx context.Context, req *LogEntry) (*LogResponse, 
 	}
 
 	// Broadcast the log to the dashboard via WebSocket
-	hub.BroadcastMessage("agent_log", req)
+	if req.Source == "terminal" {
+		log.Printf("Terminal output from %s: %s", req.AgentId, req.Message)
+	}
+	
+	payload := map[string]interface{}{
+		"agent_id":  req.AgentId,
+		"message":   req.Message,
+		"source":    req.Source,
+		"log_level": req.LogLevel,
+		"timestamp": req.Timestamp,
+	}
+	hub.BroadcastMessage("agent_log", payload)
 
 	return &LogResponse{Success: true}, nil
 }
@@ -212,7 +240,7 @@ func stableAgentID(req *RegisterRequest) string {
 
 func (h *Handler) buildAgentFRPCConfig(agentID string) (string, error) {
 	var proxies []models.Proxy
-	if err := h.database.Select(&proxies, "SELECT * FROM proxies WHERE agent_id = ? AND status = 'active'", agentID); err != nil {
+	if err := h.database.Select(&proxies, "SELECT * FROM proxies WHERE agent_id = ?", agentID); err != nil {
 		return "", err
 	}
 

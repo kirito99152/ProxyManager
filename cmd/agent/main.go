@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"context"
+	"flag"
 	"fmt"
 	"io"
 	"log"
@@ -11,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"runtime"
 	"strings"
 	"sync"
 	"syscall"
@@ -54,9 +56,22 @@ func main() {
 			main() // Auto-restart in same process (fallback)
 		}
 	}()
-	serverAddr := os.Getenv("SERVER_ADDR")
+
+	serverAddrFlag := flag.String("server", "", "Server address (IP:Port)")
+	tokenFlag := flag.String("token", "", "Agent authentication token")
+	flag.Parse()
+
+	serverAddr := *serverAddrFlag
 	if serverAddr == "" {
-		serverAddr = "10.0.3.98:50051"
+		serverAddr = os.Getenv("SERVER_ADDR")
+	}
+	if serverAddr == "" {
+		serverAddr = "160.191.50.208:50051"
+	}
+
+	token := *tokenFlag
+	if token == "" {
+		token = os.Getenv("AGENT_AUTH_TOKEN")
 	}
 
 	conn, err := grpc.NewClient(serverAddr, grpc.WithTransportCredentials(insecure.NewCredentials()))
@@ -68,7 +83,7 @@ func main() {
 	client := pb.NewAgentServiceClient(conn)
 	agent := &Agent{
 		ServerAddr: serverAddr,
-		Token:      os.Getenv("AGENT_AUTH_TOKEN"),
+		Token:      token,
 		Client:     client,
 	}
 
@@ -109,8 +124,25 @@ func (a *Agent) Register() error {
 	hInfo, _ := host.Info()
 	privateIP := getPrivateIP()
 
+	// 1. Ưu tiên dùng gopsutil (nó đã tự đọc Registry trên Win và machine-id trên Linux)
+	machineID := hInfo.HostID
+	
+	// 2. Fallback thủ công nếu gopsutil thất bại
+	if machineID == "" {
+		if runtime.GOOS == "linux" {
+			if b, err := os.ReadFile("/etc/machine-id"); err == nil {
+				machineID = strings.TrimSpace(string(b))
+			}
+		} else if runtime.GOOS == "windows" {
+			// Trên Windows, nếu gopsutil fail thì thường là do quyền, 
+			// nhưng ta vẫn có thể thử qua registry (giả định dùng thư viện chuẩn)
+			log.Println("Warning: gopsutil failed to get MachineGuid on Windows")
+		}
+	}
+
+	// Gửi kèm Machine ID vào trường Hostname bằng dấu #
 	req := &pb.RegisterRequest{
-		Hostname:  hostname,
+		Hostname:  fmt.Sprintf("%s#%s", hostname, machineID),
 		Os:        fmt.Sprintf("%s %s", hInfo.OS, hInfo.PlatformVersion),
 		PrivateIp: privateIP,
 	}
@@ -134,7 +166,7 @@ func (a *Agent) Register() error {
 		a.reloadFRPC(a.FRPCConfigTemplate)
 	}
 
-	log.Printf("Registered with ID: %s", a.ID)
+	log.Printf("Registered with ID: %s (Machine ID: %s)", a.ID, machineID)
 	return nil
 }
 
@@ -168,24 +200,27 @@ func (a *Agent) StartHeartbeat() {
 }
 
 func (a *Agent) StartCommandStream() {
-	ctx := a.getContext()
-	stream, err := a.Client.CommandStream(ctx, &pb.AgentID{AgentId: a.ID})
-	if err != nil {
-		log.Printf("CommandStream failed: %v", err)
-		return
-	}
-
 	for {
-		cmd, err := stream.Recv()
+		ctx := a.getContext()
+		stream, err := a.Client.CommandStream(ctx, &pb.AgentID{AgentId: a.ID})
 		if err != nil {
-			log.Printf("CommandStream Recv failed: %v", err)
+			log.Printf("CommandStream failed, retrying in 5s: %v", err)
 			time.Sleep(5 * time.Second)
-			go a.StartCommandStream()
-			return
+			continue
 		}
 
-		log.Printf("Received command: %s", cmd.Action)
-		a.handleCommand(cmd)
+		log.Printf("CommandStream established with server")
+		for {
+			cmd, err := stream.Recv()
+			if err != nil {
+				log.Printf("CommandStream Recv failed, reconnecting: %v", err)
+				break
+			}
+
+			log.Printf("Received command: %s", cmd.Action)
+			go a.handleCommand(cmd)
+		}
+		time.Sleep(5 * time.Second)
 	}
 }
 
@@ -205,14 +240,52 @@ func (a *Agent) handleCommand(cmd *pb.Command) {
 }
 
 func (a *Agent) remoteExec(script string) {
-	log.Printf("Executing remote script...")
+	log.Printf("Executing remote script: %s", script)
 	cmd := exec.Command("sh", "-c", script)
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		log.Printf("Remote exec failed: %v, Output: %s", err, string(output))
+	
+	stdout, _ := cmd.StdoutPipe()
+	stderr, _ := cmd.StderrPipe()
+	
+	if err := cmd.Start(); err != nil {
+		a.sendTerminalOutput(fmt.Sprintf("Error starting command: %v\n", err))
 		return
 	}
-	log.Printf("Remote exec output: %s", string(output))
+
+	// Helper to send line by line
+	sendScanner := func(r io.Reader) {
+		scanner := bufio.NewScanner(r)
+		for scanner.Scan() {
+			a.sendTerminalOutput(scanner.Text() + "\n")
+		}
+	}
+
+	go sendScanner(stdout)
+	go sendScanner(stderr)
+
+	go func() {
+		err := cmd.Wait()
+		if err != nil {
+			a.sendTerminalOutput(fmt.Sprintf("\nCommand exited with error: %v\n", err))
+		} else {
+			a.sendTerminalOutput("\n[Command finished]\n")
+		}
+	}()
+}
+
+func (a *Agent) sendTerminalOutput(message string) {
+	entry := &pb.LogEntry{
+		AgentId:   a.ID,
+		Timestamp: time.Now().Format(time.RFC3339),
+		LogLevel:  "INFO",
+		Source:    "terminal",
+		Message:   message,
+	}
+	ctx, cancel := context.WithTimeout(a.getContext(), 2*time.Second)
+	defer cancel()
+	_, err := a.Client.ForwardLog(ctx, entry)
+	if err != nil {
+		log.Printf("Failed to send terminal output to server: %v", err)
+	}
 }
 
 func (a *Agent) autoUpdate(url string) {
@@ -267,7 +340,7 @@ func (a *Agent) StartLogForwarder(filePath string, source string) {
 			Message:   strings.TrimSpace(line),
 		}
 
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		ctx, cancel := context.WithTimeout(a.getContext(), 2*time.Second)
 		a.Client.ForwardLog(ctx, entry)
 		cancel()
 	}

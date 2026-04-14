@@ -11,13 +11,15 @@ import {
   Loader2, 
   Trash2, 
   Plus, 
+  Edit2,
   Terminal, 
   FileText, 
   Cpu, 
   Monitor,
   Settings,
   Copy,
-  Check
+  Check,
+  Download
 } from 'lucide-react';
 import { 
   XAxis, 
@@ -109,6 +111,7 @@ interface Proxy {
   agent_id: string;
   name: string;
   proxy_type: 'tcp' | 'udp' | 'http' | 'https';
+  local_ip: string;
   local_port: number;
   remote_port?: number;
   custom_domain?: string;
@@ -285,10 +288,13 @@ const ProxiesPage: React.FC<{ agents: DashboardAgent[], token: string, onUnautho
   const [proxies, setProxies] = useState<Proxy[]>([]);
   const [selectedAgent, setSelectedAgent] = useState(agents[0]?.id || '');
   const [isModalOpen, setIsModalOpen] = useState(false);
-  const [newProxy, setNewProxy] = useState<Partial<Proxy>>({ name: '', proxy_type: 'tcp', local_port: 80, remote_port: 80, status: 'active' });
+  const [editingProxy, setEditingProxy] = useState<number | null>(null);
+  const [newProxy, setNewProxy] = useState<Partial<Proxy>>({ name: '', proxy_type: 'tcp', local_ip: '127.0.0.1', local_port: 80, remote_port: 80, status: 'active' });
   const [subdomain, setSubdomain] = useState('');
+  const [nameSuffix, setNameSuffix] = useState('');
 
   const activeAgent = agents.find(a => a.id === selectedAgent);
+  
   const fetchProxies = async () => {
     if (!selectedAgent) return;
     const res = await fetch(`/api/v1/agents/${selectedAgent}/proxies`, { headers: { 'Authorization': `Bearer ${token}` } });
@@ -301,7 +307,27 @@ const ProxiesPage: React.FC<{ agents: DashboardAgent[], token: string, onUnautho
 
   useEffect(() => { fetchProxies(); }, [selectedAgent]);
 
+  // When opening modal for new proxy, or changing agent, update prefix
+  useEffect(() => {
+    if (!editingProxy && activeAgent) {
+      setNewProxy(prev => ({ ...prev, name: `${activeAgent.hostname}_${nameSuffix}` }));
+    }
+  }, [activeAgent, nameSuffix, editingProxy]);
+
+  const handleSuffixChange = (val: string) => {
+    // Force lowercase, remove accents (simple regex for basic chars), remove spaces
+    const sanitized = val.toLowerCase()
+      .normalize("NFD").replace(/[\u0300-\u036f]/g, "") // Remove accents
+      .replace(/[^a-z0-9-]/g, ''); // Only allow a-z, 0-9, and hyphens
+    setNameSuffix(sanitized);
+  };
+
   const handleCreate = async () => {
+    if (!nameSuffix && !editingProxy) {
+      alert('Proxy name suffix is required');
+      return;
+    }
+
     let finalProxy = { ...newProxy, agent_id: selectedAgent };
     if (newProxy.proxy_type === 'http') {
       if (!subdomain) { alert('Subdomain is required'); return; }
@@ -309,14 +335,17 @@ const ProxiesPage: React.FC<{ agents: DashboardAgent[], token: string, onUnautho
       delete finalProxy.remote_port;
     }
 
-    const res = await fetch('/api/v1/proxies', { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` }, body: JSON.stringify(finalProxy) });
+    const url = editingProxy ? `/api/v1/proxies/${editingProxy}` : '/api/v1/proxies';
+    const method = editingProxy ? 'PUT' : 'POST';
+
+    const res = await fetch(url, { method, headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` }, body: JSON.stringify(finalProxy) });
     if (res.status === 401) {
       onUnauthorized();
       return;
     }
-    if (res.ok) { setIsModalOpen(false); fetchProxies(); } else {
+    if (res.ok) { setIsModalOpen(false); setEditingProxy(null); setNameSuffix(''); fetchProxies(); } else {
       const data = await res.json();
-      alert(data.error || 'Failed to create proxy');
+      alert(data.error || 'Failed to save proxy');
     }
   };
 
@@ -339,15 +368,68 @@ const ProxiesPage: React.FC<{ agents: DashboardAgent[], token: string, onUnautho
           <select value={selectedAgent} onChange={e => setSelectedAgent(e.target.value)} className="bg-[#1a1a1c] border border-white/10 rounded-xl p-2 text-white">
             {(agents || []).map(a => <option key={a.id} value={a.id}>{a.hostname}</option>)}
           </select>
-          <button onClick={() => { setIsModalOpen(true); setSubdomain(''); setNewProxy({ name: '', proxy_type: 'tcp', local_port: 80, remote_port: 80, status: 'active' }); }} className="bg-neon-blue text-black font-bold px-6 py-2 rounded-xl flex items-center gap-2"><Plus size={20} /> Add</button>
+          <button onClick={() => { 
+            setIsModalOpen(true); 
+            setSubdomain(''); 
+            setNameSuffix('');
+            setEditingProxy(null); 
+            setNewProxy({ name: '', proxy_type: 'tcp', local_ip: '127.0.0.1', local_port: 80, remote_port: 80, status: 'active' }); 
+          }} className="bg-neon-blue text-black font-bold px-6 py-2 rounded-xl flex items-center gap-2"><Plus size={20} /> Add</button>
         </div>
       </div>
       <div className="glass rounded-[32px] overflow-hidden mb-8 border border-white/10">
         <table className="w-full text-left">
-          <thead className="bg-white/5 text-gray-400 text-xs uppercase"><tr><th className="px-6 py-4">Name</th><th>Mapping</th><th>Status</th><th className="text-right px-6">Action</th></tr></thead>
+          <thead className="bg-white/5 text-gray-400 text-xs uppercase"><tr><th className="px-6 py-4">Name</th><th>Mapping</th><th className="px-6">Status</th><th className="text-right px-6">Action</th></tr></thead>
           <tbody className="divide-y divide-white/5 text-gray-300">
             {(proxies || []).map(p => (
-              <tr key={p.id}><td className="px-6 py-4 font-bold text-white">{p.name}</td><td>{p.local_port} → {p.proxy_type==='http'?p.custom_domain:p.remote_port}</td><td>{p.status}</td><td className="text-right px-6"><button onClick={()=>handleDelete(p.id)} className="text-red-400"><Trash2 size={16}/></button></td></tr>
+              <tr key={p.id}>
+                <td className="px-6 py-4 font-bold text-white">{p.name}</td>
+                <td><span className="text-gray-500 font-mono text-[10px] mr-1">{p.local_ip}:</span>{p.local_port} → {p.proxy_type==='http'?p.custom_domain:p.remote_port}</td>
+                <td className="px-6">
+                  {(() => {
+                    const status = (p.status as string);
+                    let colorClass = 'bg-white/5 text-gray-500 border border-white/5';
+                    let dotClass = 'bg-gray-500';
+                    
+                    if (status === 'online') {
+                      colorClass = 'bg-green-400/10 text-green-400 border border-green-400/20';
+                      dotClass = 'bg-green-400 animate-pulse';
+                    } else if (status === 'offline') {
+                      colorClass = 'bg-orange-400/10 text-orange-400 border border-orange-400/20';
+                      dotClass = 'bg-orange-400';
+                    } else if (status === 'active') {
+                      colorClass = 'bg-neon-blue/10 text-neon-blue border border-neon-blue/20';
+                      dotClass = 'bg-neon-blue';
+                    } else if (status === 'inactive') {
+                      colorClass = 'bg-red-400/10 text-red-400 border border-red-400/20';
+                      dotClass = 'bg-red-400';
+                    }
+
+                    return (
+                      <span className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider ${colorClass}`}>
+                        <span className={`w-1.5 h-1.5 rounded-full ${dotClass}`} />
+                        {status}
+                      </span>
+                    );
+                  })()}
+                </td>
+                <td className="text-right px-6 space-x-2">
+                  <button onClick={() => { 
+                    setEditingProxy(p.id); 
+                    setNewProxy(p); 
+                    if (p.name.includes('_')) {
+                      setNameSuffix(p.name.split('_').slice(1).join('_'));
+                    } else {
+                      setNameSuffix(p.name);
+                    }
+                    if (p.proxy_type === 'http' && p.custom_domain) {
+                      setSubdomain(p.custom_domain.split('.')[0]);
+                    }
+                    setIsModalOpen(true); 
+                  }} className="text-neon-blue hover:text-white transition-colors"><Edit2 size={16}/></button>
+                  <button onClick={()=>handleDelete(p.id)} className="text-red-400 hover:text-red-300 transition-colors"><Trash2 size={16}/></button>
+                </td>
+              </tr>
             ))}
           </tbody>
         </table>
@@ -367,11 +449,27 @@ const ProxiesPage: React.FC<{ agents: DashboardAgent[], token: string, onUnautho
       {isModalOpen && (
         <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 backdrop-blur-sm">
           <div className="glass max-w-md p-8 rounded-[32px] w-full border border-white/10">
-            <h2 className="text-2xl font-bold mb-6 text-white">New Proxy</h2>
+            <h2 className="text-2xl font-bold mb-6 text-white">{editingProxy ? 'Edit Proxy' : 'New Proxy'}</h2>
             <div className="space-y-4 text-white">
               <div>
-                <label className="text-xs text-gray-500 font-bold uppercase mb-1 block">Name</label>
-                <input type="text" placeholder="e.g. My Website" value={newProxy.name} onChange={e=>setNewProxy({...newProxy, name:e.target.value})} className="w-full bg-white/5 border border-white/10 rounded-xl p-3 text-white outline-none focus:border-neon-blue/50"/>
+                <label className="text-xs text-gray-500 font-bold uppercase mb-1 block">Proxy Name</label>
+                <div className="flex items-center gap-0 bg-white/5 border border-white/10 rounded-xl overflow-hidden focus-within:border-neon-blue/50">
+                  <span className="pl-3 py-3 text-gray-500 bg-white/5 border-r border-white/10 text-sm font-mono whitespace-nowrap">
+                    {activeAgent?.hostname}_
+                  </span>
+                  <input 
+                    type="text" 
+                    placeholder="suffix (e.g. ssh)" 
+                    value={nameSuffix} 
+                    onChange={e => handleSuffixChange(e.target.value)} 
+                    className="w-full bg-transparent p-3 text-white outline-none text-sm"
+                  />
+                </div>
+                <p className="text-[10px] text-gray-500 mt-1 italic">Format: {activeAgent?.hostname}_[a-z0-9-]</p>
+              </div>
+              <div>
+                <label className="text-xs text-gray-500 font-bold uppercase mb-1 block">Local IP</label>
+                <input type="text" placeholder="127.0.0.1" value={newProxy.local_ip} onChange={e=>setNewProxy({...newProxy, local_ip:e.target.value})} className="w-full bg-white/5 border border-white/10 rounded-xl p-3 text-white outline-none focus:border-neon-blue/50"/>
               </div>
               <div className="grid grid-cols-2 gap-4">
                 <div>
@@ -403,7 +501,9 @@ const ProxiesPage: React.FC<{ agents: DashboardAgent[], token: string, onUnautho
               )}
 
               <div className="pt-4 flex flex-col gap-2">
-                <button onClick={handleCreate} className="w-full bg-neon-blue text-black font-bold py-4 rounded-2xl hover:shadow-[0_0_20px_rgba(0,243,255,0.4)] transition-all">Create Tunnel</button>
+                <button onClick={handleCreate} className="w-full bg-neon-blue text-black font-bold py-4 rounded-2xl hover:shadow-[0_0_20px_rgba(0,243,255,0.4)] transition-all">
+                  {editingProxy ? 'Update Tunnel' : 'Create Tunnel'}
+                </button>
                 <button onClick={()=>setIsModalOpen(false)} className="w-full text-gray-500 py-2 hover:text-white transition-colors">Cancel</button>
               </div>
             </div>
@@ -783,10 +883,21 @@ const AgentMonitorPage: React.FC<{ agents: DashboardAgent[], token: string, onUn
 
 const TerminalPage: React.FC<{ agents: DashboardAgent[], token: string, onUnauthorized: () => void }> = ({ agents, token, onUnauthorized }) => {
   const [selectedAgent, setSelectedAgent] = useState(agents[0]?.id || '');
-  const [history, setHistory] = useState<{type:'cmd'|'out', text:string}[]>([{type:'out', text:'Connected.'}]);
+  const [history, setHistory] = useState<{type:'cmd'|'out', text:string}[]>([{type:'out', text:'Ready.'}]);
   const [input, setInput] = useState('');
   const scrollRef = useRef<HTMLDivElement>(null);
   useEffect(() => { if(scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight; }, [history]);
+
+  useEffect(() => {
+    const handleOutput = (e: any) => {
+      const { agent_id, message } = e.detail;
+      if (agent_id === selectedAgent) {
+        setHistory(prev => [...prev, { type: 'out', text: message }]);
+      }
+    };
+    window.addEventListener('terminal_output', handleOutput as EventListener);
+    return () => window.removeEventListener('terminal_output', handleOutput as EventListener);
+  }, [selectedAgent]);
 
   const handleCommand = async (e: React.FormEvent) => {
     e.preventDefault(); const cmd = input.trim(); if(!cmd) return;
@@ -797,8 +908,11 @@ const TerminalPage: React.FC<{ agents: DashboardAgent[], token: string, onUnauth
         onUnauthorized();
         return;
       }
-      const data = await res.json(); setHistory(p => [...p, {type:'out', text:data.message}]);
-    } catch(e) { setHistory(p => [...p, {type:'out', text:'Error'}]); }
+      if (!res.ok) {
+        const data = await res.json();
+        setHistory(p => [...p, {type:'out', text:`Error: ${data.error || 'Execution failed'}`}]);
+      }
+    } catch(e) { setHistory(p => [...p, {type:'out', text:'Network error'}]); }
   };
 
   return (
@@ -809,9 +923,9 @@ const TerminalPage: React.FC<{ agents: DashboardAgent[], token: string, onUnauth
       </div>
       <div className="flex-1 glass rounded-[32px] overflow-hidden flex flex-col font-mono text-sm bg-black/40 min-h-[400px] border border-white/10">
         <div ref={scrollRef} className="flex-1 p-6 overflow-y-auto space-y-1">
-          {(history || []).map((h, i) => <div key={i} className={h.type==='cmd'?'text-neon-blue':'text-gray-300'}>{h.type==='cmd'&&'$ '}{h.text}</div>)}
+          {(history || []).map((h, i) => <div key={i} className={`${h.type==='cmd'?'text-neon-blue':'text-gray-300'} whitespace-pre-wrap`}>{h.type==='cmd'&&'$ '}{h.text}</div>)}
         </div>
-        <form onSubmit={handleCommand} className="p-4 bg-white/5 border-t border-white/5 flex gap-2"><span className="text-neon-blue">$</span><input type="text" value={input} onChange={e=>setInput(e.target.value)} className="bg-transparent outline-none flex-1 text-white" placeholder="Type command..."/></form>
+        <form onSubmit={handleCommand} className="p-4 bg-white/5 border-t border-white/5 flex gap-2"><span className="text-neon-blue">$</span><input type="text" autoFocus value={input} onChange={e=>setInput(e.target.value)} className="bg-transparent outline-none flex-1 text-white" placeholder="Type command..."/></form>
       </div>
     </div>
   );
@@ -837,8 +951,13 @@ const ProfilePage: React.FC<{ user: User }> = ({ user }) => (
 
 const App: React.FC = () => {
   const initialAuth = getInitialAuthState();
-  const [activeTab, setActiveTab] = useState('dashboard');
+  const [activeTab, setActiveTab] = useState(localStorage.getItem('activeTab') || 'dashboard');
   const [user, setUser] = useState<User | null>(initialAuth.user);
+
+  // Sync activeTab to localStorage
+  useEffect(() => {
+    localStorage.setItem('activeTab', activeTab);
+  }, [activeTab]);
   const [token, setToken] = useState<string | null>(initialAuth.token);
   const [isAuthenticated, setIsAuthenticated] = useState<boolean>(initialAuth.isAuthenticated);
   const [agents, setAgents] = useState<DashboardAgent[]>([]);
@@ -861,7 +980,11 @@ const App: React.FC = () => {
       const res = await fetch('/api/v1/agents', { headers: { 'Authorization': `Bearer ${token}` } });
       if (res.status === 401) { handleUnauthorized(); return; }
       const data: Agent[] = await res.json();
-      setAgents(data.map(a => ({ ...a, hardware: a.hardware_stats ? JSON.parse(a.hardware_stats) : undefined, ports: a.open_ports ? JSON.parse(a.open_ports) : [] })));
+      setAgents(data.map(a => ({ 
+        ...a, 
+        hardware: a.hardware_stats ? JSON.parse(a.hardware_stats) : undefined, 
+        ports: a.open_ports ? JSON.parse(a.open_ports) : [] 
+      })));
       const tRes = await fetch('/api/v1/stats/traffic', { headers: { 'Authorization': `Bearer ${token}` } });
       if (tRes.status === 401) { handleUnauthorized(); return; }
       if (tRes.ok) setTrafficStats(await tRes.json());
@@ -909,8 +1032,21 @@ const App: React.FC = () => {
             const now = new Date(); const timeStr = now.toLocaleTimeString();
             setPerformanceHistory(p => [...p, { time: timeStr, cpu: Math.round(hardware.cpu_usage), ram: Math.round((hardware.ram_used/hardware.ram_total)*100) }].slice(-20));
           } else if (msg.topic === 'agent_log') {
-            const { agent_id, message } = msg.payload;
-            setLogs(p => [{ id: Math.random().toString(), agent_id, agent_name: agents.find(a=>a.id===agent_id)?.hostname||'Agent', severity:'info', message, timestamp: new Date().toISOString() }, ...p].slice(0, 100));
+            const { agent_id, message, source } = msg.payload;
+            if (source === 'terminal') {
+              window.dispatchEvent(new CustomEvent('terminal_output', { 
+                detail: { agent_id, message: String(message) } 
+              }));
+            } else {
+              setLogs(p => [{ 
+                id: Math.random().toString(), 
+                agent_id, 
+                agent_name: 'Agent', // Đơn giản hóa để tránh stale closure
+                severity:'info', 
+                message, 
+                timestamp: new Date().toISOString() 
+              }, ...p].slice(0, 100));
+            }
           }
         } catch(err) {}
       };
@@ -934,8 +1070,8 @@ const App: React.FC = () => {
           <SidebarItem icon={<Network size={20}/>} label="Proxies" active={activeTab==='proxies'} onClick={()=>setActiveTab('proxies')}/>
           <SidebarItem icon={<FileText size={20}/>} label="Logs" active={activeTab==='logs'} onClick={()=>setActiveTab('logs')}/>
           <SidebarItem icon={<Terminal size={20}/>} label="Terminal" active={activeTab==='terminal'} onClick={()=>setActiveTab('terminal')}/>
-          <SidebarItem icon={<Settings size={20}/>} label="Settings" active={activeTab==='settings'} onClick={()=>setActiveTab('settings')}/>
-        </nav>
+          <SidebarItem icon={<FileText size={20}/>} label="Docs" active={activeTab==='docs'} onClick={()=>setActiveTab('docs')}/>
+          <SidebarItem icon={<Settings size={20}/>} label="Settings" active={activeTab==='settings'} onClick={()=>setActiveTab('settings')}/>        </nav>
         <div className="p-6 border-t border-white/5"><button onClick={()=>{clearAuthData(); setIsAuthenticated(false);}} className="flex items-center gap-3 text-gray-400 hover:text-red-400 transition-colors"><LogOut size={18}/><span>Sign Out</span></button></div>
       </aside>
       <main className="flex-1 overflow-y-auto bg-[radial-gradient(circle_at_top_right,_var(--tw-gradient-stops))] from-neon-blue/5 via-transparent to-transparent">
@@ -974,6 +1110,7 @@ const App: React.FC = () => {
           {activeTab === 'proxies' && <ProxiesPage agents={agents} token={token!} onUnauthorized={handleUnauthorized} />}
           {activeTab === 'logs' && <LogsPage logs={logs} />}
           {activeTab === 'terminal' && <TerminalPage agents={agents} token={token!} onUnauthorized={handleUnauthorized} />}
+          {activeTab === 'docs' && <DocsPage />}
           {activeTab === 'settings' && <SettingsPage token={token!} onUnauthorized={handleUnauthorized} />}
           {activeTab === 'profile' && <ProfilePage user={user!} />}
         </div>
@@ -1030,5 +1167,77 @@ const SettingRow: React.FC<{ entry: SettingEntry, saving: boolean, onSave: (entr
     </div>
   );
 };
+
+
+const DocsPage: React.FC = () => (
+  <div className="animate-in fade-in slide-in-from-bottom-4 duration-500 space-y-8 pb-20">
+    <div>
+      <h1 className="text-3xl font-bold text-white">Documentation</h1>
+      <p className="text-gray-400 mt-2">Hướng dẫn vận hành hệ thống ProxyManager v1.2.0</p>
+    </div>
+
+    <div className="grid gap-8 lg:grid-cols-2">
+      <div className="glass rounded-[32px] p-8 border border-white/10">
+        <h3 className="text-xl font-bold mb-6 flex items-center gap-2 text-neon-blue"><Download size={20} /> 1. Cài đặt Agent</h3>
+        <div className="space-y-4 text-sm text-gray-300 leading-relaxed">
+          <p>Để quản lý một máy chủ từ xa, bạn cần cài đặt Agent lên máy đó:</p>
+          <ol className="list-decimal list-inside space-y-2">
+            <li>Vào mục <span className="text-white font-bold">Agents</span> trong sidebar.</li>
+            <li>Copy lệnh <span className="text-neon-blue font-bold">Quick Install</span> tương ứng với OS (Linux/Windows).</li>
+            <li>Dán vào Terminal của máy đích và chạy với quyền <span className="text-white font-bold">root/Admin</span>.</li>
+            <li>Agent sẽ tự động kết nối và xuất hiện trong danh sách sau 5-10 giây.</li>
+          </ol>
+        </div>
+      </div>
+
+      <div className="glass rounded-[32px] p-8 border border-white/10">
+        <h3 className="text-xl font-bold mb-6 flex items-center gap-2 text-neon-purple"><Network size={20} /> 2. Tạo Proxy (Tunnel)</h3>
+        <div className="space-y-4 text-sm text-gray-300">
+          <div>
+            <p className="font-bold text-white mb-1">HTTP Proxy (Wildcard Domain):</p>
+            <p>Sử dụng định dạng <code className="text-neon-blue">[subdomain].v1.c500.net</code>. Hệ thống sẽ tự động cấp SSL/TLS ở lớp ngoài.</p>
+          </div>
+          <div>
+            <p className="font-bold text-white mb-1">TCP/UDP Proxy:</p>
+            <p>Cần nhập <span className="text-white font-bold">Remote Port</span> (từ 10000 - 20000). Đây là port bạn sẽ dùng để truy cập dịch vụ từ xa.</p>
+          </div>
+        </div>
+      </div>
+
+      <div className="glass rounded-[32px] p-8 border border-white/10">
+        <h3 className="text-xl font-bold mb-6 flex items-center gap-2 text-green-400"><Activity size={20} /> 3. Trạng thái Tunnel</h3>
+        <div className="space-y-3">
+          <div className="flex items-center gap-3">
+            <span className="w-3 h-3 rounded-full bg-green-400 animate-pulse" />
+            <span className="text-sm font-bold text-white w-20">ONLINE:</span>
+            <span className="text-sm text-gray-400">Tunnel đang hoạt động, truy cập được ngay.</span>
+          </div>
+          <div className="flex items-center gap-3">
+            <span className="w-3 h-3 rounded-full bg-orange-400" />
+            <span className="text-sm font-bold text-white w-20">OFFLINE:</span>
+            <span className="text-sm text-gray-400">Đã cấu hình nhưng Agent hoặc dịch vụ nội bộ đang tắt.</span>
+          </div>
+          <div className="flex items-center gap-3">
+            <span className="w-3 h-3 rounded-full bg-neon-blue" />
+            <span className="text-sm font-bold text-white w-20">ACTIVE:</span>
+            <span className="text-sm text-gray-400">Vừa khởi tạo, đang chờ đồng bộ với Agent.</span>
+          </div>
+        </div>
+      </div>
+
+      <div className="glass rounded-[32px] p-8 border border-white/10">
+        <h3 className="text-xl font-bold mb-6 flex items-center gap-2 text-yellow-400"><Shield size={20} /> 4. Xử lý sự cố</h3>
+        <div className="space-y-2 text-xs font-mono text-gray-400">
+          <p className="text-white font-bold mb-2">// Nếu không thấy file frpc.yaml:</p>
+          <p>- Kiểm tra log Agent: journalctl -u proxymanager-agent</p>
+          <p>- Đảm bảo thư mục /opt/proxymanager có quyền ghi.</p>
+          <p className="text-white font-bold mt-4 mb-2">// Nếu Domain không truy cập được:</p>
+          <p>- Đợi 1-2 phút để Nginx & FRPS reload cấu hình.</p>
+          <p>- Kiểm tra Local Port đã chính xác chưa.</p>
+        </div>
+      </div>
+    </div>
+  </div>
+);
 
 export default App;

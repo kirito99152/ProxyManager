@@ -26,7 +26,7 @@ CREATE TABLE IF NOT EXISTS proxies (
     local_port INT NOT NULL,
     remote_port INT,           -- Port trên Server (đối với TCP/UDP)
     custom_domain VARCHAR(255), -- Domain (đối với HTTP/HTTPS)
-    status ENUM('active', 'inactive') DEFAULT 'active',
+    status ENUM('active', 'inactive', 'online', 'offline') DEFAULT 'active',
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (agent_id) REFERENCES agents(id) ON DELETE CASCADE
 ) ENGINE=InnoDB;

@@ -33,6 +33,9 @@ func main() {
 	// Start Offline Agent Monitor
 	go dashboard.StartAgentMonitor(database)
 
+	// Start FRPS Status Monitor (Tunnel Detection)
+	go dashboard.StartFrpsMonitor(database)
+
 	// Start Data Retention Policy Worker
 	go db.StartRetentionPolicy(database)
 
