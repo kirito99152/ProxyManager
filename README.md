@@ -10,7 +10,7 @@ Dự án này là minh chứng cho khả năng phối hợp tự động của c
 
 *   **Agent #1 (Lead Architect):** Thiết kế nền móng, gRPC Protobuf, Database Schema và điều phối Roadmap.
 *   **Agent #2 (Backend Developer):** Triển khai Go Server, Dashboard API, JWT Auth và WebSocket Real-time.
-*   **Agent #3 (Client Agent Developer):** Xây dựng Agent Go chạy trên máy đích, quét Port/Phần cứng, Watchdog và Remote Exec.
+*   **Agent #3 (Client Agent Developer):** Xây dựng Agent Go chạy trên máy đích, quét Port/Phần cứng, Watchdog.
 *   **Agent #4 (Frontend & DevOps):** Thiết kế UI Dark Mode (React/Vite/Tailwind), Dockerization và Script cài đặt nhanh.
 
 ---
@@ -19,7 +19,6 @@ Dự án này là minh chứng cho khả năng phối hợp tự động của c
 
 *   **Real-time Monitoring:** Biểu đồ sức khỏe máy chủ (CPU, RAM, Network) cập nhật liên tục qua WebSocket.
 *   **Smart Port Scanner:** Tự động phát hiện các Port đang mở và định danh dịch vụ trên máy khách.
-*   **Remote Terminal & Exec:** Gửi lệnh Shell và nhận kết quả trực tiếp từ Dashboard.
 *   **Log Streaming:** Theo dõi Log hệ thống từ xa theo thời gian thực (chuẩn `tail -f`).
 *   **FRP v0.68.0 Integration:** Quản lý Tunnel cấu hình hoàn toàn bằng YAML, hỗ trợ HTTP/TCP/UDP.
 *   **Wildcard Subdomain Support:** Hỗ trợ tạo proxy HTTP với domain wildcard `*.v1.c500.net` và kiểm tra tính duy nhất.
@@ -38,35 +37,34 @@ Dự án này là minh chứng cho khả năng phối hợp tự động của c
 
 ## 🚀 Hướng dẫn vận hành (Deployment)
 
-### 1. Triển khai Server (Node hiện tại - IP: 10.0.3.98)
-Node này đóng vai trò là **Control Plane**. Server chạy bằng **binary Golang + systemd**, frontend `React/Vite` được build tĩnh và phục vụ trực tiếp bởi binary Go.
+### 1. Triển khai Server (IP: 10.0.3.98)
+Dự án hỗ trợ hai phương pháp triển khai chính cho cụm điều khiển (Control Plane).
+
+#### Phương pháp 1: Sử dụng Script cập nhật nhanh (Khuyên dùng)
+Đây là cách nhanh nhất để build và cập nhật hệ thống trực tiếp trên host bằng `systemd`. Script sẽ tự động build Dashboard, Server và các Agent binaries.
 
 ```bash
-# Build frontend
-cd dashboard && npm install && npm run build
-
-# Build backend/server
-cd ..
-go build -o /opt/proxymanager/server ./cmd/server
-
-# Cài systemd service
-cp deploy/systemd/server.service /etc/systemd/system/proxymanager-server.service
-systemctl daemon-reload
-systemctl enable --now proxymanager-server
+# Chạy script cập nhật tự động
+bash scripts/update-server.sh
 ```
 
-Truy cập `http://10.0.3.98:8000` và đăng nhập mặc định bằng `admin / admin123` rồi đổi mật khẩu ngay khi chạy thực tế.
+#### Phương pháp 2: Triển khai bằng Docker (Alternative)
+Nếu bạn muốn chạy hệ thống trong môi trường container cô lập:
+
+```bash
+# Khởi chạy toàn bộ stack (Server + MySQL)
+docker-compose up -d --build
+```
+Lưu ý: Chỉnh sửa các biến môi trường trong file `.env` hoặc `docker-compose.yml` trước khi chạy.
 
 ### 2. Triển khai Client Agent (Các node khác)
-Trên máy chủ muốn quản lý, chạy script cài đặt nhanh:
+Trên các máy chủ mục tiêu (Target Nodes), chạy script cài đặt tự động để kết nối về Control Plane:
 ```bash
-# Cài đặt tự động qua bash script
 bash scripts/install-agent.sh --server 10.0.3.98:50051
 ```
 
 ### 3. Cách chạy các chức năng chính:
 *   **Dashboard:** Xem tổng quan trạng thái Online/Offline của các Node.
-*   **Terminal:** Click vào biểu tượng Terminal trên Agent để thực thi lệnh Shell.
 *   **Logs:** Xem luồng Log trực tiếp từ các dịch vụ của Agent.
 *   **Proxy Mapping:** Thiết lập Domain và Port mapping trỏ về máy nội bộ thông qua FRP.
 
