@@ -208,11 +208,6 @@ func (h *Handler) ForwardLog(ctx context.Context, req *LogEntry) (*LogResponse, 
 		return &LogResponse{Success: false}, err
 	}
 
-	// Broadcast the log to the dashboard via WebSocket
-	if req.Source == "terminal" {
-		log.Printf("Terminal output from %s: %s", req.AgentId, req.Message)
-	}
-	
 	payload := map[string]interface{}{
 		"agent_id":  req.AgentId,
 		"message":   req.Message,
@@ -254,7 +249,11 @@ func (h *Handler) buildAgentFRPCConfig(agentID string) (string, error) {
 
 	config := fmt.Sprintf("serverAddr: \"%s\"\nserverPort: %s\nauth:\n  token: \"%s\"\n\nproxies:\n", serverIP, frpPort, frpToken)
 	for _, p := range proxies {
-		config += fmt.Sprintf("  - name: \"%s\"\n    type: \"%s\"\n", p.Name, p.ProxyType)
+		localIP := p.LocalIP
+		if localIP == "" {
+			localIP = "127.0.0.1"
+		}
+		config += fmt.Sprintf("  - name: \"%s\"\n    type: \"%s\"\n    localIP: \"%s\"\n", p.Name, p.ProxyType, localIP)
 		if p.ProxyType == "http" || p.ProxyType == "https" {
 			config += fmt.Sprintf("    localPort: %d\n    customDomains: [\"%s\"]\n", p.LocalPort, valueOrEmpty(p.CustomDomain))
 		} else {

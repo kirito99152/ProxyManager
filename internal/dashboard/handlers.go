@@ -57,26 +57,6 @@ func (h *DashboardHandler) GetAgentByID(c *gin.Context) {
 	c.JSON(http.StatusOK, agent)
 }
 
-func (h *DashboardHandler) ExecuteCommand(c *gin.Context) {
-	agentID := c.Param("id")
-	var req struct {
-		Command string `json:"command" binding:"required"`
-	}
-	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid payload"})
-		return
-	}
-
-	// Use the shared apiHandler to send a command
-	err := h.apiHandler.SendCommand(agentID, "REMOTE_EXEC", req.Command)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to send command to agent: " + err.Error()})
-		return
-	}
-
-	c.JSON(http.StatusOK, gin.H{"message": "Command queued for execution"})
-}
-
 func (h *DashboardHandler) UpgradeAgent(c *gin.Context) {
 	agentID := c.Param("id")
 	
@@ -307,7 +287,11 @@ func (h *DashboardHandler) syncAgentFRPConfig(agentID string) {
 	config := fmt.Sprintf("serverAddr: \"%s\"\nserverPort: %s\nauth:\n  token: \"%s\"\n\nproxies:\n", serverIP, frpPort, frpToken)
 
 	for _, p := range proxies {
-		config += fmt.Sprintf("  - name: \"%s\"\n    type: \"%s\"\n    localIP: \"%s\"\n", p.Name, p.ProxyType, p.LocalIP)
+		localIP := p.LocalIP
+		if localIP == "" {
+			localIP = "127.0.0.1"
+		}
+		config += fmt.Sprintf("  - name: \"%s\"\n    type: \"%s\"\n    localIP: \"%s\"\n", p.Name, p.ProxyType, localIP)
 		if p.ProxyType == "http" || p.ProxyType == "https" {
 			domain := ""
 			if p.CustomDomain != nil {
@@ -610,7 +594,7 @@ rm -rf "$WORKDIR"
 mkdir -p "$WORKDIR"
 cd "$WORKDIR"
 
-echo "Downloading agent binary..."
+echo "Downloading agent binary (v1.0.6)..."
 curl -fsSL "$BASE_URL/downloads/$AGENT_FILE" -o agent
 chmod +x agent
 
@@ -659,15 +643,23 @@ $ServiceName = "ProxyManagerAgent"
 $ServerAddr = %q
 $AgentToken = %q
 
+# Force kill only processes running from our WorkDir to avoid touching unrelated frpc.exe instances
+Get-Process agent, frpc -ErrorAction SilentlyContinue | Where-Object { 
+  try { $_.Path -like "$WorkDir\*" } catch { $false }
+} | Stop-Process -Force -ErrorAction SilentlyContinue
+Start-Sleep -Seconds 1
+
 if (Get-Service -Name $ServiceName -ErrorAction SilentlyContinue) {
   Stop-Service -Name $ServiceName -Force -ErrorAction SilentlyContinue
-  # sc.exe delete $ServiceName | Out-Null
-  Start-Sleep -Seconds 2
+  sc.exe delete $ServiceName | Out-Null
+  Start-Sleep -Seconds 1
 }
 
-if (Test-Path $WorkDir) {
-  # Remove-Item -Path $WorkDir -Recurse -Force
-} else {
+# Attempt to remove old files, ensuring they aren't locked
+if (Test-Path "$WorkDir\agent.exe") { Remove-Item -Path "$WorkDir\agent.exe" -Force -ErrorAction SilentlyContinue }
+if (Test-Path "$WorkDir\frpc.exe") { Remove-Item -Path "$WorkDir\frpc.exe" -Force -ErrorAction SilentlyContinue }
+
+if (-not (Test-Path $WorkDir)) {
   New-Item -ItemType Directory -Force -Path $WorkDir | Out-Null
 }
 
@@ -685,7 +677,7 @@ switch ($env:PROCESSOR_ARCHITECTURE) {
   default { throw "Unsupported architecture: $env:PROCESSOR_ARCHITECTURE" }
 }
 
-Write-Host "Downloading agent binary..."
+Write-Host "Downloading agent binary (v1.0.6)..."
 curl.exe -fsSL "$BaseUrl/downloads/$AgentFile" -o "$WorkDir\agent.exe"
 
 Write-Host "Downloading frpc..."
@@ -695,7 +687,7 @@ curl.exe -fsSL "$BaseUrl/downloads/$FrpFile" -o "$WorkDir\frpc.exe"
 [Environment]::SetEnvironmentVariable("AGENT_AUTH_TOKEN", $AgentToken, "Machine")
 
 if (-not (Get-Service -Name $ServiceName -ErrorAction SilentlyContinue)) {
-    $binPath = "C:\Windows\System32\cmd.exe /c set SERVER_ADDR=$ServerAddr && set AGENT_AUTH_TOKEN=$AgentToken && cd /d $WorkDir && agent.exe"
+    $binPath = "$WorkDir\agent.exe"
     New-Service -Name $ServiceName -BinaryPathName $binPath -DisplayName "ProxyManager Agent" -StartupType Automatic | Out-Null
 }
 

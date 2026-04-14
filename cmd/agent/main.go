@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"sync"
@@ -48,14 +49,44 @@ type Agent struct {
 	lastNetOut uint64
 }
 
+const Version = "1.0.6"
+
+func (a *Agent) Stop() {
+	a.frpcMu.Lock()
+	defer a.frpcMu.Unlock()
+	if a.frpcProcess != nil && a.frpcProcess.Process != nil {
+		log.Println("Stopping FRPC process...")
+		if runtime.GOOS == "windows" {
+			a.frpcProcess.Process.Kill()
+		} else {
+			a.frpcProcess.Process.Signal(syscall.SIGTERM)
+		}
+		a.frpcProcess.Wait()
+	}
+}
+
 func main() {
+	// Chuyển thư mục làm việc về thư mục chứa file thực thi
+	execPath, err := os.Executable()
+	if err == nil {
+		os.Chdir(filepath.Dir(execPath))
+	}
+
+	// Thiết lập log ra file agent.log
+	logFile, err := os.OpenFile("agent.log", os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0666)
+	if err == nil {
+		log.SetOutput(io.MultiWriter(os.Stdout, logFile))
+	}
+
 	defer func() {
 		if r := recover(); r != nil {
 			log.Printf("Recovered from panic: %v", r)
 			time.Sleep(5 * time.Second)
-			main() // Auto-restart in same process (fallback)
+			main()
 		}
 	}()
+
+	log.Printf("ProxyManager Agent v%s starting...", Version)
 
 	serverAddrFlag := flag.String("server", "", "Server address (IP:Port)")
 	tokenFlag := flag.String("token", "", "Agent authentication token")
@@ -74,6 +105,15 @@ func main() {
 		token = os.Getenv("AGENT_AUTH_TOKEN")
 	}
 
+	if isWindowsService() {
+		runService(serverAddr, token)
+		return
+	}
+
+	runAgent(serverAddr, token)
+}
+
+func runAgent(serverAddr, token string) {
 	conn, err := grpc.NewClient(serverAddr, grpc.WithTransportCredentials(insecure.NewCredentials()))
 	if err != nil {
 		log.Fatalf("did not connect: %v", err)
@@ -96,7 +136,9 @@ func main() {
 
 	// Check for auth log file existence
 	authLogPath := "/var/log/auth.log"
-	if _, err := os.Stat(authLogPath); os.IsNotExist(err) {
+	if runtime.GOOS == "windows" {
+		authLogPath = "" // No standard auth log file on Windows for now
+	} else if _, err := os.Stat(authLogPath); os.IsNotExist(err) {
 		authLogPath = "/var/log/secure" // Fallback for RHEL/CentOS
 		if _, err := os.Stat(authLogPath); os.IsNotExist(err) {
 			log.Println("No standard auth log file found. Skipping log forwarder.")
@@ -112,6 +154,7 @@ func main() {
 	signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM)
 	<-stop
 	log.Println("Agent stopping...")
+	agent.Stop()
 }
 
 func (a *Agent) getContext() context.Context {
@@ -350,9 +393,18 @@ func (a *Agent) getServiceStatus(serviceNames []string) []*pb.ServiceInfo {
 	var services []*pb.ServiceInfo
 	for _, name := range serviceNames {
 		status := "stopped"
-		cmd := exec.Command("systemctl", "is-active", name)
-		if err := cmd.Run(); err == nil {
-			status = "running"
+		if runtime.GOOS == "linux" {
+			cmd := exec.Command("systemctl", "is-active", name)
+			if err := cmd.Run(); err == nil {
+				status = "running"
+			}
+		} else if runtime.GOOS == "windows" {
+			// Basic check for Windows services
+			cmd := exec.Command("powershell", "-Command", fmt.Sprintf("(Get-Service -Name %s).Status", name))
+			output, err := cmd.Output()
+			if err == nil && strings.TrimSpace(string(output)) == "Running" {
+				status = "running"
+			}
 		}
 		services = append(services, &pb.ServiceInfo{
 			Name:   name,
@@ -372,6 +424,9 @@ func (a *Agent) reloadFRPC(config string) {
 	}
 
 	frpcPath := "./frpc"
+	if runtime.GOOS == "windows" {
+		frpcPath = "./frpc.exe"
+	}
 	os.WriteFile("frpc.yaml", []byte(config), 0644)
 	a.frpcProcess = exec.Command(frpcPath, "-c", "frpc.yaml")
 	a.frpcProcess.Start()
@@ -381,6 +436,9 @@ func (a *Agent) getHardwareStats() *pb.HardwareStats {
 	cUsage, _ := cpu.Percent(0, false)
 	vMem, _ := mem.VirtualMemory()
 	dUsage, _ := disk.Usage("/")
+	if runtime.GOOS == "windows" {
+		dUsage, _ = disk.Usage("C:")
+	}
 	io, _ := psnet.IOCounters(false)
 
 	var cpuPercent float64

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect } from 'react';
 import { 
   LayoutDashboard, 
   Server, 
@@ -12,7 +12,6 @@ import {
   Trash2, 
   Plus, 
   Edit2,
-  Terminal, 
   FileText, 
   Cpu, 
   Monitor,
@@ -881,56 +880,6 @@ const AgentMonitorPage: React.FC<{ agents: DashboardAgent[], token: string, onUn
   );
 };
 
-const TerminalPage: React.FC<{ agents: DashboardAgent[], token: string, onUnauthorized: () => void }> = ({ agents, token, onUnauthorized }) => {
-  const [selectedAgent, setSelectedAgent] = useState(agents[0]?.id || '');
-  const [history, setHistory] = useState<{type:'cmd'|'out', text:string}[]>([{type:'out', text:'Ready.'}]);
-  const [input, setInput] = useState('');
-  const scrollRef = useRef<HTMLDivElement>(null);
-  useEffect(() => { if(scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight; }, [history]);
-
-  useEffect(() => {
-    const handleOutput = (e: any) => {
-      const { agent_id, message } = e.detail;
-      if (agent_id === selectedAgent) {
-        setHistory(prev => [...prev, { type: 'out', text: message }]);
-      }
-    };
-    window.addEventListener('terminal_output', handleOutput as EventListener);
-    return () => window.removeEventListener('terminal_output', handleOutput as EventListener);
-  }, [selectedAgent]);
-
-  const handleCommand = async (e: React.FormEvent) => {
-    e.preventDefault(); const cmd = input.trim(); if(!cmd) return;
-    setHistory(p => [...p, {type:'cmd', text:cmd}]); setInput('');
-    try {
-      const res = await fetch(`/api/v1/agents/${selectedAgent}/execute`, { method:'POST', headers:{'Content-Type':'application/json','Authorization':`Bearer ${token}`}, body:JSON.stringify({command:cmd}) });
-      if (res.status === 401) {
-        onUnauthorized();
-        return;
-      }
-      if (!res.ok) {
-        const data = await res.json();
-        setHistory(p => [...p, {type:'out', text:`Error: ${data.error || 'Execution failed'}`}]);
-      }
-    } catch(e) { setHistory(p => [...p, {type:'out', text:'Network error'}]); }
-  };
-
-  return (
-    <div className="h-full flex flex-col animate-in fade-in slide-in-from-bottom-4 duration-500">
-      <div className="flex justify-between mb-8 text-white">
-        <h1 className="text-3xl font-bold">Terminal</h1>
-        <select value={selectedAgent} onChange={e=>setSelectedAgent(e.target.value)} className="bg-[#1a1a1c] border border-white/10 rounded-xl p-2 text-white">{(agents || []).map(a=><option key={a.id} value={a.id}>{a.hostname}</option>)}</select>
-      </div>
-      <div className="flex-1 glass rounded-[32px] overflow-hidden flex flex-col font-mono text-sm bg-black/40 min-h-[400px] border border-white/10">
-        <div ref={scrollRef} className="flex-1 p-6 overflow-y-auto space-y-1">
-          {(history || []).map((h, i) => <div key={i} className={`${h.type==='cmd'?'text-neon-blue':'text-gray-300'} whitespace-pre-wrap`}>{h.type==='cmd'&&'$ '}{h.text}</div>)}
-        </div>
-        <form onSubmit={handleCommand} className="p-4 bg-white/5 border-t border-white/5 flex gap-2"><span className="text-neon-blue">$</span><input type="text" autoFocus value={input} onChange={e=>setInput(e.target.value)} className="bg-transparent outline-none flex-1 text-white" placeholder="Type command..."/></form>
-      </div>
-    </div>
-  );
-};
-
 const ProfilePage: React.FC<{ user: User }> = ({ user }) => (
   <div className="animate-in fade-in slide-in-from-bottom-4 duration-500">
     <h1 className="text-3xl font-bold mb-8 text-white">Profile</h1>
@@ -1032,21 +981,15 @@ const App: React.FC = () => {
             const now = new Date(); const timeStr = now.toLocaleTimeString();
             setPerformanceHistory(p => [...p, { time: timeStr, cpu: Math.round(hardware.cpu_usage), ram: Math.round((hardware.ram_used/hardware.ram_total)*100) }].slice(-20));
           } else if (msg.topic === 'agent_log') {
-            const { agent_id, message, source } = msg.payload;
-            if (source === 'terminal') {
-              window.dispatchEvent(new CustomEvent('terminal_output', { 
-                detail: { agent_id, message: String(message) } 
-              }));
-            } else {
-              setLogs(p => [{ 
-                id: Math.random().toString(), 
-                agent_id, 
-                agent_name: 'Agent', // Đơn giản hóa để tránh stale closure
-                severity:'info', 
-                message, 
-                timestamp: new Date().toISOString() 
-              }, ...p].slice(0, 100));
-            }
+            const { agent_id, message } = msg.payload;
+            setLogs(p => [{ 
+              id: Math.random().toString(), 
+              agent_id, 
+              agent_name: 'Agent', // Đơn giản hóa để tránh stale closure
+              severity:'info', 
+              message, 
+              timestamp: new Date().toISOString() 
+            }, ...p].slice(0, 100));
           }
         } catch(err) {}
       };
@@ -1069,7 +1012,6 @@ const App: React.FC = () => {
           <SidebarItem icon={<Activity size={20}/>} label="Host Status" active={activeTab==='host'} onClick={()=>setActiveTab('host')}/>
           <SidebarItem icon={<Network size={20}/>} label="Proxies" active={activeTab==='proxies'} onClick={()=>setActiveTab('proxies')}/>
           <SidebarItem icon={<FileText size={20}/>} label="Logs" active={activeTab==='logs'} onClick={()=>setActiveTab('logs')}/>
-          <SidebarItem icon={<Terminal size={20}/>} label="Terminal" active={activeTab==='terminal'} onClick={()=>setActiveTab('terminal')}/>
           <SidebarItem icon={<FileText size={20}/>} label="Docs" active={activeTab==='docs'} onClick={()=>setActiveTab('docs')}/>
           <SidebarItem icon={<Settings size={20}/>} label="Settings" active={activeTab==='settings'} onClick={()=>setActiveTab('settings')}/>        </nav>
         <div className="p-6 border-t border-white/5"><button onClick={()=>{clearAuthData(); setIsAuthenticated(false);}} className="flex items-center gap-3 text-gray-400 hover:text-red-400 transition-colors"><LogOut size={18}/><span>Sign Out</span></button></div>
@@ -1109,7 +1051,6 @@ const App: React.FC = () => {
           {activeTab === 'host' && <HostStatusPage token={token!} onUnauthorized={handleUnauthorized} />}
           {activeTab === 'proxies' && <ProxiesPage agents={agents} token={token!} onUnauthorized={handleUnauthorized} />}
           {activeTab === 'logs' && <LogsPage logs={logs} />}
-          {activeTab === 'terminal' && <TerminalPage agents={agents} token={token!} onUnauthorized={handleUnauthorized} />}
           {activeTab === 'docs' && <DocsPage />}
           {activeTab === 'settings' && <SettingsPage token={token!} onUnauthorized={handleUnauthorized} />}
           {activeTab === 'profile' && <ProfilePage user={user!} />}
