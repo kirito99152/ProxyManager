@@ -1,6 +1,7 @@
 package dashboard
 
 import (
+	"github.com/kirito99152/ProxyManager/internal/hub"
 	"log"
 	"time"
 
@@ -42,7 +43,7 @@ func StartAgentMonitor(database *db.DB) {
 				"agent_id": agent.ID,
 				"status":   "offline",
 			}
-			BroadcastMessage("agent_status", payload)
+			hub.BroadcastMessage("agent_status", payload)
 		}
 	}
 }

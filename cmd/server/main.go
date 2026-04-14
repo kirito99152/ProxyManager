@@ -11,6 +11,7 @@ import (
 	"github.com/kirito99152/ProxyManager/internal/api"
 	"github.com/kirito99152/ProxyManager/internal/dashboard"
 	"github.com/kirito99152/ProxyManager/internal/db"
+	"github.com/kirito99152/ProxyManager/internal/hub"
 	"google.golang.org/grpc"
 )
 
@@ -27,7 +28,7 @@ func main() {
 	}
 
 	// Start WebSocket Hub
-	go dashboard.Hub.Run()
+	go hub.Hub.Run()
 
 	// Start Offline Agent Monitor
 	go dashboard.StartAgentMonitor(database)
@@ -67,7 +68,33 @@ func startGRPCServer(apiHandler *api.Handler) {
 
 func startDashboardServer(database *db.DB, apiHandler *api.Handler) {
 	r := gin.Default()
+
+	// CORS Middleware
+	r.Use(func(c *gin.Context) {
+		c.Writer.Header().Set("Access-Control-Allow-Origin", "*")
+		c.Writer.Header().Set("Access-Control-Allow-Credentials", "true")
+		c.Writer.Header().Set("Access-Control-Allow-Headers", "Content-Type, Content-Length, Accept-Encoding, X-CSRF-Token, Authorization, accept, origin, Cache-Control, X-Requested-With")
+		c.Writer.Header().Set("Access-Control-Allow-Methods", "POST, OPTIONS, GET, PUT, DELETE")
+
+		if c.Request.Method == "OPTIONS" {
+			c.AbortWithStatus(204)
+			return
+		}
+		c.Next()
+	})
+
 	dashboard.SetupRoutes(r, database, apiHandler)
+
+	// Serve Static Files
+	r.Static("/assets", "./dashboard/dist/assets")
+	r.Static("/downloads", "./downloads")
+	r.StaticFile("/favicon.svg", "./dashboard/dist/favicon.svg")
+	r.StaticFile("/icons.svg", "./dashboard/dist/icons.svg")
+
+	// SPA Fallback: Route everything else to index.html
+	r.NoRoute(func(c *gin.Context) {
+		c.File("./dashboard/dist/index.html")
+	})
 
 	dashboardPort := os.Getenv("DASHBOARD_PORT")
 	if dashboardPort == "" {

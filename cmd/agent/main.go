@@ -21,14 +21,17 @@ import (
 	"github.com/shirou/gopsutil/v3/host"
 	"github.com/shirou/gopsutil/v3/mem"
 	psnet "github.com/shirou/gopsutil/v3/net"
+	"github.com/shirou/gopsutil/v3/process"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/metadata"
 
 	pb "github.com/kirito99152/ProxyManager/internal/api"
 )
 
 type Agent struct {
 	ID                 string
+	Token              string
 	ServerAddr         string
 	FRPServerAddr      string
 	FRPServerPort      string
@@ -65,6 +68,7 @@ func main() {
 	client := pb.NewAgentServiceClient(conn)
 	agent := &Agent{
 		ServerAddr: serverAddr,
+		Token:      os.Getenv("AGENT_AUTH_TOKEN"),
 		Client:     client,
 	}
 
@@ -74,12 +78,30 @@ func main() {
 
 	go agent.StartHeartbeat()
 	go agent.StartCommandStream()
-	go agent.StartLogForwarder("/var/log/auth.log", "auth.log")
+
+	// Check for auth log file existence
+	authLogPath := "/var/log/auth.log"
+	if _, err := os.Stat(authLogPath); os.IsNotExist(err) {
+		authLogPath = "/var/log/secure" // Fallback for RHEL/CentOS
+		if _, err := os.Stat(authLogPath); os.IsNotExist(err) {
+			log.Println("No standard auth log file found. Skipping log forwarder.")
+			authLogPath = ""
+		}
+	}
+
+	if authLogPath != "" {
+		go agent.StartLogForwarder(authLogPath, "auth.log")
+	}
 
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM)
 	<-stop
 	log.Println("Agent stopping...")
+}
+
+func (a *Agent) getContext() context.Context {
+	md := metadata.New(map[string]string{"authorization": a.Token})
+	return metadata.NewOutgoingContext(context.Background(), md)
 }
 
 func (a *Agent) Register() error {
@@ -93,7 +115,7 @@ func (a *Agent) Register() error {
 		PrivateIp: privateIP,
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(a.getContext(), 10*time.Second)
 	defer cancel()
 
 	resp, err := a.Client.Register(ctx, req)
@@ -106,6 +128,11 @@ func (a *Agent) Register() error {
 	a.FRPServerAddr = resp.FrpServerAddr
 	a.FRPServerPort = resp.FrpServerPort
 	a.FRPToken = resp.FrpToken
+
+	if strings.TrimSpace(a.FRPCConfigTemplate) != "" {
+		log.Printf("Restoring FRPC config from server for agent %s", a.ID)
+		a.reloadFRPC(a.FRPCConfigTemplate)
+	}
 
 	log.Printf("Registered with ID: %s", a.ID)
 	return nil
@@ -125,7 +152,7 @@ func (a *Agent) StartHeartbeat() {
 			Services:  services,
 		}
 
-		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		ctx, cancel := context.WithTimeout(a.getContext(), 3*time.Second)
 		resp, err := a.Client.Heartbeat(ctx, req)
 		cancel()
 
@@ -141,7 +168,7 @@ func (a *Agent) StartHeartbeat() {
 }
 
 func (a *Agent) StartCommandStream() {
-	ctx := context.Background()
+	ctx := a.getContext()
 	stream, err := a.Client.CommandStream(ctx, &pb.AgentID{AgentId: a.ID})
 	if err != nil {
 		log.Printf("CommandStream failed: %v", err)
@@ -303,12 +330,12 @@ func (a *Agent) getHardwareStats() *pb.HardwareStats {
 	}
 
 	return &pb.HardwareStats{
-		CpuUsage:  cpuPercent,
-		RamTotal:  vMem.Total,
-		RamUsed:   vMem.Used,
-		DiskFree:  dUsage.Free,
-		NetIn:     netIn,
-		NetOut:    netOut,
+		CpuUsage: cpuPercent,
+		RamTotal: vMem.Total,
+		RamUsed:  vMem.Used,
+		DiskFree: dUsage.Free,
+		NetIn:    netIn,
+		NetOut:   netOut,
 	}
 }
 
@@ -322,9 +349,20 @@ func (a *Agent) getOpenPorts() []*pb.PortInfo {
 				continue
 			}
 			seen[conn.Laddr.Port] = true
+
+			serviceName := "Unknown"
+			if conn.Pid > 0 {
+				proc, err := process.NewProcess(conn.Pid)
+				if err == nil {
+					name, _ := proc.Name()
+					serviceName = fmt.Sprintf("%s (PID: %d)", name, conn.Pid)
+				}
+			}
+
 			ports = append(ports, &pb.PortInfo{
-				Port:     int32(conn.Laddr.Port),
-				Protocol: "tcp",
+				Port:        int32(conn.Laddr.Port),
+				Protocol:    "tcp",
+				ServiceName: serviceName,
 			})
 		}
 	}

@@ -54,7 +54,7 @@ CREATE TABLE IF NOT EXISTS hardware_logs (
 ) ENGINE=InnoDB;
 
 -- Tối ưu hóa cho Milestone #4
-CREATE INDEX IF NOT EXISTS idx_hardware_agent_id_created_at ON hardware_logs (agent_id, created_at);
+CREATE INDEX idx_hardware_agent_id_created_at ON hardware_logs (agent_id, created_at);
 
 -- Bảng quản lý người dùng (Milestone 3)
 CREATE TABLE IF NOT EXISTS users (
@@ -86,4 +86,4 @@ CREATE TABLE IF NOT EXISTS settings (
 ) ENGINE=InnoDB;
 
 -- Tài khoản admin mặc định (Mật khẩu: admin123 - Cần thay đổi khi chạy thực tế)
-INSERT IGNORE INTO users (username, password_hash, role) VALUES ('admin', '$2a$10$wTfH.d./k2vBInI3n7M0.eCq0L07H5mF4D9hVb5l3FhZ4D5X/r4T6', 'admin');
+INSERT IGNORE INTO users (username, password_hash, role) VALUES ('admin', '$2a$10$58Hpa.34o.70uQyvgDRJ1uXSVo6LDVVl4JEcgs/Nh1zr5DHoAFRcG', 'admin');

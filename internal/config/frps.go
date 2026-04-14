@@ -8,11 +8,16 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-const frpsConfigPath = "configs/frps.yaml"
+func frpsConfigPath() string {
+	if path := os.Getenv("FRPS_CONFIG"); path != "" {
+		return path
+	}
+	return "configs/frps.yaml"
+}
 
 // GetFrpsConfig reads the FRPS configuration file.
 func GetFrpsConfig() (map[string]interface{}, error) {
-	data, err := os.ReadFile(frpsConfigPath)
+	data, err := os.ReadFile(frpsConfigPath())
 	if err != nil {
 		return nil, fmt.Errorf("failed to read config file: %w", err)
 	}
@@ -33,15 +38,17 @@ func UpdateFrpsConfig(newConfig map[string]interface{}) error {
 		return fmt.Errorf("failed to serialize yaml: %w", err)
 	}
 
-	err = os.WriteFile(frpsConfigPath, data, 0644)
+	err = os.WriteFile(frpsConfigPath(), data, 0644)
 	if err != nil {
 		return fmt.Errorf("failed to write config file: %w", err)
 	}
 
-	// Attempt to reload or restart FRPS.
-	// The exact command depends on Agent #4's systemd setup.
-	// For now, we'll try restarting a 'frps' systemd service.
-	cmd := exec.Command("systemctl", "restart", "frps")
+	serviceName := os.Getenv("FRPS_SERVICE")
+	if serviceName == "" {
+		serviceName = "frps"
+	}
+
+	cmd := exec.Command("systemctl", "restart", serviceName)
 	if err := cmd.Run(); err != nil {
 		// Log the error but don't fail the API request entirely,
 		// as the config was saved successfully.

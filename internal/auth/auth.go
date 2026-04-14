@@ -2,16 +2,20 @@ package auth
 
 import (
 	"errors"
+	"os"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
 	"golang.org/x/crypto/bcrypt"
 )
 
-var (
-	// In production, this should be an environment variable
-	jwtSecretKey = []byte("super-secret-key-proxy-manager")
-)
+func getJWTSecret() []byte {
+	secret := os.Getenv("JWT_SECRET")
+	if secret == "" {
+		return []byte("super-secret-key-proxy-manager-fallback")
+	}
+	return []byte(secret)
+}
 
 type Claims struct {
 	Username string `json:"username"`
@@ -33,14 +37,14 @@ func GenerateToken(username, role string) (string, error) {
 	}
 
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
-	return token.SignedString(jwtSecretKey)
+	return token.SignedString(getJWTSecret())
 }
 
 // ValidateToken parses and validates a JWT token
 func ValidateToken(tokenString string) (*Claims, error) {
 	claims := &Claims{}
 	token, err := jwt.ParseWithClaims(tokenString, claims, func(token *jwt.Token) (interface{}, error) {
-		return jwtSecretKey, nil
+		return getJWTSecret(), nil
 	})
 
 	if err != nil {

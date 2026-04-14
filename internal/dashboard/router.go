@@ -40,6 +40,7 @@ func SetupRoutes(r *gin.Engine, database *db.DB, apiHandler *api.Handler) {
 				admin.GET("/frps/config", handler.GetFrpsConfig)
 				admin.PUT("/frps/config", handler.UpdateFrpsConfig)
 				admin.GET("/frps/status", handler.GetFrpsStatus)
+				admin.GET("/host/ports", handler.GetHostPorts)
 
 				// System Settings & Logs
 				admin.GET("/settings", handler.GetSettings)

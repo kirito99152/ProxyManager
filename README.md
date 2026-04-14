@@ -22,6 +22,7 @@ Dự án này là minh chứng cho khả năng phối hợp tự động của c
 *   **Remote Terminal & Exec:** Gửi lệnh Shell và nhận kết quả trực tiếp từ Dashboard.
 *   **Log Streaming:** Theo dõi Log hệ thống từ xa theo thời gian thực (chuẩn `tail -f`).
 *   **FRP v0.68.0 Integration:** Quản lý Tunnel cấu hình hoàn toàn bằng YAML, hỗ trợ HTTP/TCP/UDP.
+*   **Wildcard Subdomain Support:** Hỗ trợ tạo proxy HTTP với domain wildcard `*.v1.c500.net` và kiểm tra tính duy nhất.
 *   **Enterprise Security:** Bảo mật JWT Authentication và cô lập mạng bằng Docker Network.
 
 ---
@@ -38,12 +39,23 @@ Dự án này là minh chứng cho khả năng phối hợp tự động của c
 ## 🚀 Hướng dẫn vận hành (Deployment)
 
 ### 1. Triển khai Server (Node hiện tại - IP: 10.0.3.98)
-Node này đóng vai trò là **Control Plane**.
+Node này đóng vai trò là **Control Plane**. Server chạy bằng **binary Golang + systemd**, frontend `React/Vite` được build tĩnh và phục vụ trực tiếp bởi binary Go.
+
 ```bash
-# Clone và khởi chạy toàn bộ hệ thống
-docker-compose up -d
+# Build frontend
+cd dashboard && npm install && npm run build
+
+# Build backend/server
+cd ..
+go build -o /opt/proxymanager/server ./cmd/server
+
+# Cài systemd service
+cp deploy/systemd/server.service /etc/systemd/system/proxymanager-server.service
+systemctl daemon-reload
+systemctl enable --now proxymanager-server
 ```
-Truy cập `http://10.0.3.98` để đăng ký tài khoản Admin.
+
+Truy cập `http://10.0.3.98:8000` và đăng nhập mặc định bằng `admin / admin123` rồi đổi mật khẩu ngay khi chạy thực tế.
 
 ### 2. Triển khai Client Agent (Các node khác)
 Trên máy chủ muốn quản lý, chạy script cài đặt nhanh:
