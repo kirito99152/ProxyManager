@@ -21,7 +21,7 @@ Dự án này là minh chứng cho khả năng phối hợp tự động của c
 *   **Smart Port Scanner:** Tự động phát hiện các Port đang mở và định danh dịch vụ trên máy khách.
 *   **Log Streaming:** Theo dõi Log hệ thống từ xa theo thời gian thực (chuẩn `tail -f`).
 *   **FRP v0.68.0 Integration:** Quản lý Tunnel cấu hình hoàn toàn bằng YAML, hỗ trợ HTTP/TCP/UDP.
-*   **Wildcard Subdomain Support:** Hỗ trợ tạo proxy HTTP với domain wildcard `*.v1.c500.net` và kiểm tra tính duy nhất.
+*   **Wildcard Subdomain Support:** Hỗ trợ tạo proxy HTTP với domain wildcard `*.v1.ovncr.vn` và kiểm tra tính duy nhất.
 *   **Enterprise Security:** Bảo mật JWT Authentication và cô lập mạng bằng Docker Network.
 
 ---
@@ -35,16 +35,29 @@ Dự án này là minh chứng cho khả năng phối hợp tự động của c
 
 ---
 
+## 📋 Yêu cầu hệ thống (System Requirements)
+*   **Go:** v1.24.2+
+*   **Node.js:** v20.x+
+*   **MySQL:** v8.0+
+*   **FRP:** v0.68.0 (Tải tại: [frp v0.68.1 Releases](https://github.com/fatedier/frp/releases/tag/v0.68.1))
+    *   Sử dụng định dạng cấu hình `.yaml`.
+    *   Hệ thống yêu cầu cả `frps` (server) và `frpc` (agent) phải cùng phiên bản 0.68.0 để đảm bảo tính tương thích tốt nhất.
+
+---
+
 ## 🚀 Hướng dẫn vận hành (Deployment)
 
-### 1. Triển khai Server (IP: 10.0.3.98)
+### 1. Triển khai Server (IP: YOUR_SERVER_IP)
 Dự án hỗ trợ hai phương pháp triển khai chính cho cụm điều khiển (Control Plane).
 
-#### Phương pháp 1: Sử dụng Script cập nhật nhanh (Khuyên dùng)
-Đây là cách nhanh nhất để build và cập nhật hệ thống trực tiếp trên host bằng `systemd`. Script sẽ tự động build Dashboard, Server và các Agent binaries.
+#### Phương pháp 1: Sử dụng Script cài đặt & cập nhật (Khuyên dùng)
+Đây là cách nhanh nhất để build và cài đặt hệ thống trực tiếp trên host bằng `systemd`.
 
 ```bash
-# Chạy script cập nhật tự động
+# 1. Cài đặt đầy đủ môi trường (Go, Node, MySQL, FRPS)
+bash setup.sh
+
+# 2. Chạy script cập nhật & build dự án
 bash scripts/update-server.sh
 ```
 
@@ -60,7 +73,7 @@ Lưu ý: Chỉnh sửa các biến môi trường trong file `.env` hoặc `dock
 ### 2. Triển khai Client Agent (Các node khác)
 Trên các máy chủ mục tiêu (Target Nodes), chạy script cài đặt tự động để kết nối về Control Plane:
 ```bash
-bash scripts/install-agent.sh --server 10.0.3.98:50051
+bash scripts/install-agent.sh --server <YOUR_SERVER_IP>:50051
 ```
 
 ### 3. Cách chạy các chức năng chính:

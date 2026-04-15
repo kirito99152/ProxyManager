@@ -97,7 +97,7 @@ func main() {
 		serverAddr = os.Getenv("SERVER_ADDR")
 	}
 	if serverAddr == "" {
-		serverAddr = "160.191.50.208:50051"
+		serverAddr = "localhost:50051"
 	}
 
 	token := *tokenFlag

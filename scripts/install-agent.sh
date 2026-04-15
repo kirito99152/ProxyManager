@@ -16,7 +16,32 @@ RED='\033[0;31m'
 GREEN='\033[0;32m'
 NC='\033[0m'
 
+# Parse arguments
+SERVER_ADDR=""
+while [[ $# -gt 0 ]]; do
+  case $1 in
+    --server)
+      SERVER_ADDR="$2"
+      shift # past argument
+      shift # past value
+      ;;
+    *)
+      echo "Unknown argument: $1"
+      exit 1
+      ;;
+  esac
+done
+
+if [ -z "$SERVER_ADDR" ]; then
+    echo -e "${RED}Error: --server argument is required (e.g. --server 59.153.245.146:50051)${NC}"
+    exit 1
+fi
+
+SERVER_IP=$(echo $SERVER_ADDR | cut -d':' -f1)
+DASHBOARD_URL="http://$SERVER_IP:8000"
+
 echo -e "${GREEN}Starting ProxyManager Agent Professional Installation...${NC}"
+echo "Server Address: $SERVER_ADDR"
 
 # 1. Prerequisites
 if [[ $EUID -ne 0 ]]; then
@@ -29,6 +54,7 @@ mkdir -p $INSTALL_DIR
 # 2. Firewall configuration (UFW/Iptables)
 echo "Configuring firewall for FRP..."
 if command -v ufw > /dev/null; then
+    # Standard ports
     ufw allow 7000/tcp comment 'FRP Server'
     ufw allow 7500/tcp comment 'FRP Dashboard'
     ufw allow 80,443/tcp comment 'FRP Web'
@@ -37,12 +63,12 @@ fi
 
 # 3. Download FRP v0.68.0 from local server
 echo "Downloading FRP v0.68.0 from ProxyManager Server..."
-wget -q http://160.191.50.208:8000/downloads/frpc-linux-amd64 -O $INSTALL_DIR/frpc
+wget -q "$DASHBOARD_URL/downloads/frpc-linux-amd64" -O $INSTALL_DIR/frpc
 chmod +x $INSTALL_DIR/frpc
 
 # 4. Agent Binary
 echo "Setting up Agent binary..."
-wget -q http://160.191.50.208:8000/downloads/agent-linux-amd64 -O $INSTALL_DIR/agent
+wget -q "$DASHBOARD_URL/downloads/agent-linux-amd64" -O $INSTALL_DIR/agent
 chmod +x $INSTALL_DIR/agent
 
 # 5. Setup Systemd Service for Agent (Auto-restart enabled)
@@ -55,7 +81,7 @@ After=network.target
 Type=simple
 User=root
 WorkingDirectory=$INSTALL_DIR
-ExecStart=$INSTALL_DIR/agent -server 160.191.50.208:50051
+ExecStart=$INSTALL_DIR/agent -server $SERVER_ADDR
 Restart=always
 RestartSec=10
 StartLimitIntervalSec=0
@@ -84,8 +110,6 @@ EOF
 
 # 7. Reload and Start
 systemctl daemon-reload
-# systemctl enable $AGENT_NAME
-# systemctl enable frpc
 
 echo -e "${GREEN}Installation completed!${NC}"
 echo "ProxyManager Agent is now managed by systemd."

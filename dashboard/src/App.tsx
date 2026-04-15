@@ -202,7 +202,7 @@ const LoginPage: React.FC<{ onLogin: (token: string, user: User) => void }> = ({
       onLogin(data.token, {
         username: data.user.username,
         role: data.user.role,
-        email: `${data.user.username}@c500.net`,
+        email: `${data.user.username}@${import.meta.env.VITE_WILDCARD_DOMAIN || 'ovncr.vn'}`,
         avatar: `https://ui-avatars.com/api/?name=${data.user.username}&background=00f3ff`
       });
     } catch (err: any) { setError(err.message); } finally { setLoading(false); }
@@ -330,7 +330,7 @@ const ProxiesPage: React.FC<{ agents: DashboardAgent[], token: string, onUnautho
     let finalProxy = { ...newProxy, agent_id: selectedAgent };
     if (newProxy.proxy_type === 'http') {
       if (!subdomain) { alert('Subdomain is required'); return; }
-      finalProxy.custom_domain = `${subdomain}.v1.c500.net`;
+      finalProxy.custom_domain = `${subdomain}.${import.meta.env.VITE_WILDCARD_DOMAIN || 'v1.ovncr.vn'}`;
       delete finalProxy.remote_port;
     }
 
@@ -489,7 +489,7 @@ const ProxiesPage: React.FC<{ agents: DashboardAgent[], token: string, onUnautho
                   <label className="text-xs text-gray-500 font-bold uppercase mb-1 block">Domain</label>
                   <div className="flex items-center gap-2 bg-white/5 border border-white/10 rounded-xl p-3">
                     <input type="text" placeholder="subdomain" value={subdomain} onChange={e=>setSubdomain(e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, ''))} className="bg-transparent outline-none text-white w-full text-right"/>
-                    <span className="text-gray-500">.v1.c500.net</span>
+                    <span className="text-gray-500">.{import.meta.env.VITE_WILDCARD_DOMAIN || 'v1.ovncr.vn'}</span>
                   </div>
                 </div>
               ) : (
@@ -1136,7 +1136,7 @@ const DocsPage: React.FC = () => (
         <div className="space-y-4 text-sm text-gray-300">
           <div>
             <p className="font-bold text-white mb-1">HTTP Proxy (Wildcard Domain):</p>
-            <p>Sử dụng định dạng <code className="text-neon-blue">[subdomain].v1.c500.net</code>. Hệ thống sẽ tự động cấp SSL/TLS ở lớp ngoài.</p>
+            <p>Sử dụng định dạng <code className="text-neon-blue">[subdomain].{import.meta.env.VITE_WILDCARD_DOMAIN || 'v1.ovncr.vn'}</code>. Hệ thống sẽ tự động cấp SSL/TLS ở lớp ngoài.</p>
           </div>
           <div>
             <p className="font-bold text-white mb-1">TCP/UDP Proxy:</p>

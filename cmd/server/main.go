@@ -89,14 +89,14 @@ func startDashboardServer(database *db.DB, apiHandler *api.Handler) {
 	dashboard.SetupRoutes(r, database, apiHandler)
 
 	// Serve Static Files
-	r.Static("/assets", "./dashboard/dist/assets")
-	r.Static("/downloads", "./downloads")
-	r.StaticFile("/favicon.svg", "./dashboard/dist/favicon.svg")
-	r.StaticFile("/icons.svg", "./dashboard/dist/icons.svg")
+	r.Static("/assets", "dashboard/dist/assets")
+	r.Static("/downloads", "downloads")
+	r.StaticFile("/favicon.svg", "dashboard/dist/favicon.svg")
+	r.StaticFile("/icons.svg", "dashboard/dist/icons.svg")
 
 	// SPA Fallback: Route everything else to index.html
 	r.NoRoute(func(c *gin.Context) {
-		c.File("./dashboard/dist/index.html")
+		c.File("dashboard/dist/index.html")
 	})
 
 	dashboardPort := os.Getenv("DASHBOARD_PORT")

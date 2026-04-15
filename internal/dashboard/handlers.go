@@ -699,6 +699,12 @@ Get-Service -Name $ServiceName
 }
 
 func publicBaseURL(c *gin.Context) string {
+	serverIP := os.Getenv("SERVER_IP")
+	dashboardPort := os.Getenv("DASHBOARD_PORT")
+	if dashboardPort == "" {
+		dashboardPort = "8000"
+	}
+
 	scheme := c.GetHeader("X-Forwarded-Proto")
 	if scheme == "" {
 		if c.Request.TLS != nil {
@@ -709,13 +715,15 @@ func publicBaseURL(c *gin.Context) string {
 	}
 
 	host := c.Request.Host
-	if host == "" {
-		serverIP := os.Getenv("SERVER_IP")
-		dashboardPort := os.Getenv("DASHBOARD_PORT")
-		if dashboardPort == "" {
-			dashboardPort = "8000"
+	if serverIP != "" {
+		// If SERVER_IP is set in .env, prioritize it over request host
+		// to ensure external agents use the correct address.
+		host = serverIP
+		if dashboardPort != "80" && dashboardPort != "443" {
+			host = fmt.Sprintf("%s:%s", serverIP, dashboardPort)
 		}
-		host = fmt.Sprintf("%s:%s", serverIP, dashboardPort)
+	} else if host == "" {
+		host = fmt.Sprintf("localhost:%s", dashboardPort)
 	}
 
 	return fmt.Sprintf("%s://%s", scheme, host)
