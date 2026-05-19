@@ -1,0 +1,15 @@
+# ProxyManager dedicated FRPS
+bindAddr: "0.0.0.0"
+bindPort: 7001
+
+webServer:
+  addr: "127.0.0.1"
+  port: 7501
+  user: "admin"
+  password: "pm_frps_dashboard_2026"
+
+vhostHTTPPort: 18081
+
+auth:
+  method: "token"
+  token: "pm_frps_0f4b6db1f0e44658a1c12c5a85103b5d"

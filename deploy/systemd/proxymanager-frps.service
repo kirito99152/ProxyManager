@@ -1,0 +1,15 @@
+[Unit]
+Description=ProxyManager Dedicated FRPS
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/root/ProxyManager
+ExecStart=/opt/frp/frps -c /root/ProxyManager/configs/frps.yaml
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

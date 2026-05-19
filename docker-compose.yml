@@ -1,0 +1,40 @@
+version: '3.8'
+
+services:
+  mysql:
+    image: mysql:8.0
+    restart: always
+    environment:
+      MYSQL_ROOT_PASSWORD: ${DB_PASSWORD:-your_mysql_password}
+      MYSQL_DATABASE: ${DB_NAME:-proxymanager}
+    volumes:
+      - mysql_data:/var/lib/mysql
+    networks:
+      - proxymanager_network
+
+  server:
+    build: .
+    restart: always
+    ports:
+      - "${DASHBOARD_PORT:-8000}:8000"
+      - "${GRPC_PORT:-50051}:50051"
+    environment:
+      - DB_HOST=mysql
+      - DB_PORT=3306
+      - DB_USER=root
+      - DB_PASSWORD=${DB_PASSWORD:-your_mysql_password}
+      - DB_NAME=${DB_NAME:-proxymanager}
+      - SERVER_IP=${SERVER_IP:-10.0.3.98}
+      - GRPC_PORT=50051
+      - DASHBOARD_PORT=8000
+    depends_on:
+      - mysql
+    networks:
+      - proxymanager_network
+
+networks:
+  proxymanager_network:
+    driver: bridge
+
+volumes:
+  mysql_data:

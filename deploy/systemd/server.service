@@ -1,0 +1,17 @@
+[Unit]
+Description=ProxyManager Server
+After=network-online.target mysql.service mariadb.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/proxymanager
+EnvironmentFile=-/opt/proxymanager/.env
+ExecStart=/opt/proxymanager/server
+Restart=always
+RestartSec=5
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target

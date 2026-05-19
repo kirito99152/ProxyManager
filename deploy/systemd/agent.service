@@ -1,0 +1,19 @@
+[Unit]
+Description=ProxyManager Agent Service
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/usr/local/bin
+ExecStart=/usr/local/bin/agent
+Restart=always
+RestartSec=5
+LimitNOFILE=65536
+
+# Resource Limiting (Milestone #4)
+CPUQuota=10%
+MemoryLimit=128M
+
+[Install]
+WantedBy=multi-user.target
