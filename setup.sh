@@ -15,7 +15,7 @@ DB_NAME=${DB_NAME:-proxymanager}
 
 # 1. Update system and install dependencies
 apt-get update
-apt-get install -y wget curl tar build-essential mysql-server
+apt-get install -y wget curl tar build-essential mysql-server nginx certbot python3-certbot-nginx
 
 # 2. Install Go 1.24.2
 if ! go version | grep -q "go1.24.2"; then
@@ -52,6 +52,28 @@ systemctl enable mysql
 mysql -e "CREATE DATABASE IF NOT EXISTS ${DB_NAME};" || true
 mysql -e "ALTER USER '${DB_USER}'@'localhost' IDENTIFIED WITH mysql_native_password BY '${DB_PASSWORD}'; FLUSH PRIVILEGES;" || true
 mysql -u ${DB_USER} -p${DB_PASSWORD} ${DB_NAME} < internal/db/schema.sql || echo "Schema already imported or error occurred"
+
+# 5.5 Configure Nginx
+echo "Configuring Nginx..."
+systemctl start nginx
+systemctl enable nginx
+mkdir -p /etc/nginx/proxymanager.d
+
+# Ensure Nginx includes proxymanager.d configs in its http block
+NGINX_CONF="/etc/nginx/nginx.conf"
+if [ -f "$NGINX_CONF" ]; then
+    INCLUDE_LINE="include /etc/nginx/proxymanager.d/*.conf;"
+    if ! grep -Fq "$INCLUDE_LINE" "$NGINX_CONF"; then
+        echo "Injecting proxymanager.d include line into $NGINX_CONF..."
+        TARGET_LINE="include /etc/nginx/conf.d/*.conf;"
+        if grep -Fq "$TARGET_LINE" "$NGINX_CONF"; then
+            sed -i "s|$TARGET_LINE|$TARGET_LINE\n    $INCLUDE_LINE|" "$NGINX_CONF"
+        else
+            sed -i '/http {/a \    include /etc/nginx/proxymanager.d/*.conf;' "$NGINX_CONF"
+        fi
+        nginx -t && systemctl reload nginx
+    fi
+fi
 
 # 6. Create Runtime Directory
 mkdir -p /opt/proxymanager

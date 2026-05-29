@@ -86,5 +86,17 @@ CREATE TABLE IF NOT EXISTS settings (
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
 ) ENGINE=InnoDB;
 
+-- One-time install script tokens
+CREATE TABLE IF NOT EXISTS install_tokens (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    token_hash CHAR(64) NOT NULL UNIQUE,
+    target_os VARCHAR(20) NOT NULL,
+    expires_at TIMESTAMP NOT NULL,
+    used_at TIMESTAMP NULL DEFAULT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    INDEX idx_install_tokens_expires_at (expires_at),
+    INDEX idx_install_tokens_target_os (target_os)
+) ENGINE=InnoDB;
+
 -- Default admin account (Password: admin123 - MUST change in production)
 INSERT IGNORE INTO users (username, password_hash, role) VALUES ('admin', '$2a$10$58Hpa.34o.70uQyvgDRJ1uXSVo6LDVVl4JEcgs/Nh1zr5DHoAFRcG', 'admin');

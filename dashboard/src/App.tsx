@@ -300,7 +300,7 @@ const HostStatusPage: React.FC<{ token: string, onUnauthorized: () => void }> = 
 
 const ProxiesPage: React.FC<{ agents: DashboardAgent[], token: string, onUnauthorized: () => void }> = ({ agents, token, onUnauthorized }) => {
   const [proxies, setProxies] = useState<Proxy[]>([]);
-  const [selectedAgent, setSelectedAgent] = useState(agents[0]?.id || '');
+  const [selectedAgent, setSelectedAgent] = useState(() => localStorage.getItem('selectedAgent_proxies') || '');
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingProxy, setEditingProxy] = useState<number | null>(null);
   const [newProxy, setNewProxy] = useState<Partial<Proxy>>({ name: '', proxy_type: 'tcp', local_ip: '127.0.0.1', local_port: 80, remote_port: 80, status: 'active' });
@@ -308,14 +308,29 @@ const ProxiesPage: React.FC<{ agents: DashboardAgent[], token: string, onUnautho
   const [nameSuffix, setNameSuffix] = useState('');
   const [domainStatuses, setDomainStatuses] = useState<Record<string, DomainStatus>>({});
   const [domainBusy, setDomainBusy] = useState<string | null>(null);
+  const [domainMode, setDomainMode] = useState<'subdomain' | 'custom'>('subdomain');
+  const [customDomainInput, setCustomDomainInput] = useState('');
 
   const activeAgent = agents.find(a => a.id === selectedAgent);
 
   useEffect(() => {
-    if (!selectedAgent && agents[0]?.id) {
-      setSelectedAgent(agents[0].id);
+    const saved = localStorage.getItem('selectedAgent_proxies');
+    const onlineAgents = (agents || []).filter(a => a.status === 'online');
+    const isValidSaved = saved && onlineAgents.some(a => a.id === saved);
+
+    if (isValidSaved) {
+      setSelectedAgent(saved!);
+    } else if (onlineAgents.length > 0) {
+      setSelectedAgent(onlineAgents[0].id);
+      localStorage.setItem('selectedAgent_proxies', onlineAgents[0].id);
     }
-  }, [agents, selectedAgent]);
+  }, [agents]);
+
+  useEffect(() => {
+    if (selectedAgent) {
+      localStorage.setItem('selectedAgent_proxies', selectedAgent);
+    }
+  }, [selectedAgent]);
   
   const fetchProxies = async () => {
     if (!selectedAgent) return;
@@ -342,6 +357,44 @@ const ProxiesPage: React.FC<{ agents: DashboardAgent[], token: string, onUnautho
     setNameSuffix(sanitized);
   };
 
+  const startCreateProxy = () => {
+    setEditingProxy(null);
+    setNewProxy({ name: '', proxy_type: 'tcp', local_ip: '127.0.0.1', local_port: 80, remote_port: 80, status: 'active' });
+    setSubdomain('');
+    setCustomDomainInput('');
+    setDomainMode('subdomain');
+    setNameSuffix('');
+    setIsModalOpen(true);
+  };
+
+  const startEditProxy = (p: Proxy) => {
+    setEditingProxy(p.id);
+    setNewProxy(p);
+    if (p.name.includes('_')) {
+      setNameSuffix(p.name.split('_').slice(1).join('_'));
+    } else {
+      setNameSuffix(p.name);
+    }
+    
+    if (p.proxy_type === 'http' && p.custom_domain) {
+      const suffix = import.meta.env.VITE_WILDCARD_DOMAIN || 'v1.ovncr.vn';
+      if (p.custom_domain.endsWith('.' + suffix)) {
+        setDomainMode('subdomain');
+        setSubdomain(p.custom_domain.slice(0, p.custom_domain.length - suffix.length - 1));
+        setCustomDomainInput('');
+      } else {
+        setDomainMode('custom');
+        setSubdomain('');
+        setCustomDomainInput(p.custom_domain);
+      }
+    } else {
+      setDomainMode('subdomain');
+      setSubdomain('');
+      setCustomDomainInput('');
+    }
+    setIsModalOpen(true);
+  };
+
   const handleCreate = async () => {
     if (!nameSuffix && !editingProxy) {
       alert('Vui lòng nhập hậu tố tên Proxy');
@@ -350,8 +403,24 @@ const ProxiesPage: React.FC<{ agents: DashboardAgent[], token: string, onUnautho
 
     let finalProxy = { ...newProxy, agent_id: selectedAgent };
     if (newProxy.proxy_type === 'http') {
-      if (!subdomain) { alert('Vui lòng nhập Subdomain'); return; }
-      finalProxy.custom_domain = `${subdomain}.${import.meta.env.VITE_WILDCARD_DOMAIN || 'v1.ovncr.vn'}`;
+      if (domainMode === 'subdomain') {
+        if (!subdomain) {
+          alert('Vui lòng nhập Subdomain');
+          return;
+        }
+        finalProxy.custom_domain = `${subdomain}.${import.meta.env.VITE_WILDCARD_DOMAIN || 'v1.ovncr.vn'}`;
+      } else {
+        if (!customDomainInput) {
+          alert('Vui lòng nhập Tên miền riêng (Custom Domain)');
+          return;
+        }
+        const domainRegex = /^([a-zA-Z0-9-]+\.)+[a-zA-Z]{2,}$/;
+        if (!domainRegex.test(customDomainInput)) {
+          alert('Tên miền riêng không hợp lệ (Ví dụ: yourdomain.com hoặc app.yourdomain.com)');
+          return;
+        }
+        finalProxy.custom_domain = customDomainInput;
+      }
       delete finalProxy.remote_port;
     }
 
@@ -403,15 +472,10 @@ const ProxiesPage: React.FC<{ agents: DashboardAgent[], token: string, onUnautho
         <div><h1 className="text-3xl font-bold text-white">Proxies</h1><p className="text-gray-400">Quản lý tunnel & giám sát cổng agent</p></div>
         <div className="flex flex-col sm:flex-row gap-3">
           <select value={selectedAgent} onChange={e => setSelectedAgent(e.target.value)} className="bg-[#1a1a1c] border border-white/10 rounded-xl p-3 text-white">
-            {(agents || []).map(a => <option key={a.id} value={a.id}>{a.name || a.hostname}</option>)}
+            {(agents || []).filter(a => a.status === 'online').map(a => <option key={a.id} value={a.id}>{a.name || a.hostname}</option>)}
+            {(agents || []).filter(a => a.status === 'online').length === 0 && <option value="">Không có agent trực tuyến</option>}
           </select>
-          <button onClick={() => { 
-            setIsModalOpen(true); 
-            setSubdomain(''); 
-            setNameSuffix('');
-            setEditingProxy(null); 
-            setNewProxy({ name: '', proxy_type: 'tcp', local_ip: '127.0.0.1', local_port: 80, remote_port: 80, status: 'active' }); 
-          }} className="bg-neon-blue text-black font-bold px-6 py-3 rounded-xl flex items-center justify-center gap-2"><Plus size={20} /> Thêm mới</button>
+          <button onClick={startCreateProxy} className="bg-neon-blue text-black font-bold px-6 py-3 rounded-xl flex items-center justify-center gap-2"><Plus size={20} /> Thêm mới</button>
         </div>
       </div>
 
@@ -427,7 +491,7 @@ const ProxiesPage: React.FC<{ agents: DashboardAgent[], token: string, onUnautho
                   <td className="px-6"><ProxyStatusBadge status={p.status}/>{p.custom_domain && <DomainHealth status={domainStatuses[p.custom_domain]} />}</td>
                   <td className="text-right px-6 space-x-2">
                     {p.custom_domain && <DomainActions domain={p.custom_domain} busy={domainBusy} onAction={handleDomainAction} />}
-                    <button onClick={() => { setEditingProxy(p.id); setNewProxy(p); if (p.name.includes('_')) { setNameSuffix(p.name.split('_').slice(1).join('_')); } else { setNameSuffix(p.name); } if (p.proxy_type === 'http' && p.custom_domain) { setSubdomain(p.custom_domain.split('.')[0]); } setIsModalOpen(true); }} className="text-neon-blue hover:text-white p-2"><Edit2 size={16}/></button>
+                    <button onClick={() => startEditProxy(p)} className="text-neon-blue hover:text-white p-2"><Edit2 size={16}/></button>
                     <button onClick={()=>handleDelete(p.id)} className="text-red-400 hover:text-red-300 p-2"><Trash2 size={16}/></button>
                   </td>
                 </tr>
@@ -453,7 +517,7 @@ const ProxiesPage: React.FC<{ agents: DashboardAgent[], token: string, onUnautho
               </div>
               <div className="flex gap-2 pt-2">
                 {p.custom_domain && <button onClick={() => handleDomainAction(p.custom_domain!, 'status')} className="flex-1 bg-white/5 border border-white/10 text-white py-2 rounded-xl flex items-center justify-center gap-2"><Globe size={14}/> DNS</button>}
-                <button onClick={() => { setEditingProxy(p.id); setNewProxy(p); if (p.name.includes('_')) { setNameSuffix(p.name.split('_').slice(1).join('_')); } else { setNameSuffix(p.name); } if (p.proxy_type === 'http' && p.custom_domain) { setSubdomain(p.custom_domain.split('.')[0]); } setIsModalOpen(true); }} className="flex-1 bg-white/5 border border-white/10 text-white py-2 rounded-xl flex items-center justify-center gap-2"><Edit2 size={14}/> Sửa</button>
+                <button onClick={() => startEditProxy(p)} className="flex-1 bg-white/5 border border-white/10 text-white py-2 rounded-xl flex items-center justify-center gap-2"><Edit2 size={14}/> Sửa</button>
                 <button onClick={()=>handleDelete(p.id)} className="flex-1 bg-red-400/10 border border-red-400/20 text-red-400 py-2 rounded-xl flex items-center justify-center gap-2"><Trash2 size={14}/> Xóa</button>
               </div>
             </div>
@@ -507,11 +571,94 @@ const ProxiesPage: React.FC<{ agents: DashboardAgent[], token: string, onUnautho
               </div>
               
               {newProxy.proxy_type === 'http' ? (
-                <div>
-                  <label className="text-xs text-gray-500 font-bold uppercase mb-1 block">Tên miền (Subdomain)</label>
-                  <div className="flex items-center gap-2 bg-white/5 border border-white/10 rounded-xl p-3">
-                    <input type="text" placeholder="sub" value={subdomain} onChange={e=>setSubdomain(e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, ''))} className="bg-transparent outline-none text-white w-full text-right text-sm"/>
-                    <span className="text-gray-500 text-xs shrink-0">.{import.meta.env.VITE_WILDCARD_DOMAIN || 'v1.ovncr.vn'}</span>
+                <div className="space-y-4">
+                  <div>
+                    <label className="text-xs text-gray-500 font-bold uppercase mb-1.5 block">Loại Tên Miền</label>
+                    <div className="grid grid-cols-2 p-1 bg-white/5 border border-white/10 rounded-xl">
+                      <button
+                        type="button"
+                        onClick={() => setDomainMode('subdomain')}
+                        className={`py-2 text-xs font-bold rounded-lg transition-all duration-300 ${
+                          domainMode === 'subdomain'
+                            ? 'bg-neon-blue text-black shadow-[0_0_15px_rgba(0,243,255,0.3)]'
+                            : 'text-gray-400 hover:text-white'
+                        }`}
+                      >
+                        Subdomain Hệ Thống
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setDomainMode('custom')}
+                        className={`py-2 text-xs font-bold rounded-lg transition-all duration-300 ${
+                          domainMode === 'custom'
+                            ? 'bg-neon-blue text-black shadow-[0_0_15px_rgba(0,243,255,0.3)]'
+                            : 'text-gray-400 hover:text-white'
+                        }`}
+                      >
+                        Tên Miền Riêng
+                      </button>
+                    </div>
+                  </div>
+
+                  {domainMode === 'subdomain' ? (
+                    <div>
+                      <label className="text-xs text-gray-500 font-bold uppercase mb-1.5 block font-mono">Tên miền (Subdomain)</label>
+                      <div className="flex items-center gap-2 bg-white/5 border border-white/10 rounded-xl p-3 focus-within:border-neon-blue/50 transition-all duration-200">
+                        <input
+                          type="text"
+                          placeholder="sub"
+                          value={subdomain}
+                          onChange={e => setSubdomain(e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, ''))}
+                          className="bg-transparent outline-none text-white w-full text-right text-sm font-mono"
+                        />
+                        <span className="text-gray-500 text-xs shrink-0 font-mono">
+                          .{import.meta.env.VITE_WILDCARD_DOMAIN || 'v1.ovncr.vn'}
+                        </span>
+                      </div>
+                    </div>
+                  ) : (
+                    <div>
+                      <label className="text-xs text-gray-500 font-bold uppercase mb-1.5 block font-mono">Tên Miền Riêng</label>
+                      <div className="flex items-center bg-white/5 border border-white/10 rounded-xl p-3 focus-within:border-neon-blue/50 transition-all duration-200">
+                        <input
+                          type="text"
+                          placeholder="domain.com hoặc sub.domain.com"
+                          value={customDomainInput}
+                          onChange={e => setCustomDomainInput(e.target.value.toLowerCase().replace(/[^a-z0-9.-]/g, ''))}
+                          className="bg-transparent outline-none text-white w-full text-sm font-mono"
+                        />
+                      </div>
+                      <p className="text-[10px] text-gray-400 mt-2 leading-relaxed">
+                        Lưu ý: Vui lòng cấu hình bản ghi <code className="text-neon-blue">A</code> trỏ về IP máy chủ của bạn trước khi thực hiện các thao tác thiết lập Nginx và kích hoạt SSL.
+                      </p>
+                    </div>
+                  )}
+
+                  {/* Premium Notice about default optimization */}
+                  <div className="bg-white/5 border border-white/10 rounded-xl p-4 space-y-2.5">
+                    <div className="flex items-center gap-2 text-neon-blue text-xs font-bold uppercase font-mono tracking-wider">
+                      <svg className="w-4 h-4 text-neon-blue animate-pulse" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                      </svg>
+                      Cấu hình Nginx mặc định tối ưu:
+                    </div>
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 text-[10px]">
+                      <div className="bg-[#1a1a1c]/60 border border-white/5 rounded-lg p-2 flex flex-col justify-between">
+                        <span className="text-gray-400 block font-bold mb-1 font-mono uppercase tracking-wider text-[9px]">WebSockets</span>
+                        <span className="text-neon-blue font-semibold">Tự động hỗ trợ</span>
+                      </div>
+                      <div className="bg-[#1a1a1c]/60 border border-white/5 rounded-lg p-2 flex flex-col justify-between">
+                        <span className="text-gray-400 block font-bold mb-1 font-mono uppercase tracking-wider text-[9px]">Tải file nặng</span>
+                        <span className="text-emerald-400 font-semibold">Tối đa 1024MB</span>
+                      </div>
+                      <div className="bg-[#1a1a1c]/60 border border-white/5 rounded-lg p-2 flex flex-col justify-between">
+                        <span className="text-gray-400 block font-bold mb-1 font-mono uppercase tracking-wider text-[9px]">Timeout kết nối</span>
+                        <span className="text-amber-400 font-semibold">300 giây</span>
+                      </div>
+                    </div>
+                    <p className="text-[10px] text-gray-400 leading-relaxed font-sans">
+                      Dịch vụ tự động tạo tệp cấu hình Nginx trong thư mục riêng biệt <code className="text-neon-blue font-mono">/etc/nginx/proxymanager.d/</code> và tự động xin cấp chứng chỉ SSL miễn phí qua Certbot.
+                    </p>
                   </div>
                 </div>
               ) : (
@@ -588,9 +735,11 @@ const AgentsPage: React.FC<{ agents: DashboardAgent[], token: string, onRefresh:
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editName, setEditName] = useState('');
   const [saving, setSaving] = useState(false);
-  const origin = window.location.origin;
-  const linuxCommand = `curl -fsSL ${origin}/api/v1/install/script?os=linux | sudo bash`;
-  const windowsCommand = `powershell -NoProfile -ExecutionPolicy Bypass -Command "[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; iex (Invoke-WebRequest -UseBasicParsing -Uri '${origin}/api/v1/install/script?os=windows').Content"`;
+  const [installCommands, setInstallCommands] = useState<Record<string, string>>({
+    linux: 'Bấm "Tạo & sao chép" để sinh link cài đặt dùng 1 lần.',
+    windows: 'Bấm "Tạo & sao chép" để sinh link cài đặt dùng 1 lần.'
+  });
+  const [generatingInstall, setGeneratingInstall] = useState<string | null>(null);
 
   const startEdit = (agent: DashboardAgent) => {
     setEditingId(agent.id);
@@ -625,12 +774,35 @@ const AgentsPage: React.FC<{ agents: DashboardAgent[], token: string, onRefresh:
     }
   };
 
-  const handleCopy = async (key: string, value: string) => {
+  const generateInstallCommand = async (os: 'linux' | 'windows') => {
+    const res = await fetch('/api/v1/install/token', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${token}`
+      },
+      body: JSON.stringify({ os })
+    });
+    if (!res.ok) {
+      throw new Error(`Failed to create ${os} install token`);
+    }
+    const data = await res.json();
+    return data.command as string;
+  };
+
+  const handleCopy = async (key: 'linux' | 'windows') => {
+    setGeneratingInstall(key);
     try {
-      await copyToClipboard(value);
+      const command = await generateInstallCommand(key);
+      setInstallCommands((current) => ({ ...current, [key]: command }));
+      await copyToClipboard(command);
       setCopiedKey(key);
       window.setTimeout(() => setCopiedKey((current) => current === key ? null : current), 2000);
-    } catch {}
+    } catch (err) {
+      console.error('Failed to create install command:', err);
+    } finally {
+      setGeneratingInstall(null);
+    }
   };
 
   return (
@@ -654,17 +826,19 @@ const AgentsPage: React.FC<{ agents: DashboardAgent[], token: string, onRefresh:
           <InstallCommandCard
             title="Linux"
             description="Ubuntu, Debian, CentOS"
-            command={linuxCommand}
+            command={installCommands.linux}
             copied={copiedKey === 'linux'}
-            onCopy={() => handleCopy('linux', linuxCommand)}
+            loading={generatingInstall === 'linux'}
+            onCopy={() => handleCopy('linux')}
           />
           <div className="space-y-4">
             <InstallCommandCard
               title="Windows"
               description="Chạy trong Admin PowerShell"
-              command={windowsCommand}
+              command={installCommands.windows}
               copied={copiedKey === 'windows'}
-              onCopy={() => handleCopy('windows', windowsCommand)}
+              loading={generatingInstall === 'windows'}
+              onCopy={() => handleCopy('windows')}
             />
             <div className="px-4">
               <a 
@@ -939,13 +1113,27 @@ const SettingsPage: React.FC<{ token: string, onUnauthorized: () => void }> = ({
 };
 
 const AgentMonitorPage: React.FC<{ agents: DashboardAgent[], token: string, onUnauthorized: () => void }> = ({ agents, token, onUnauthorized }) => {
-  const [selectedAgent, setSelectedAgent] = useState(agents[0]?.id || '');
+  const [selectedAgent, setSelectedAgent] = useState(() => localStorage.getItem('selectedAgent_monitor') || '');
   const [history, setHistory] = useState<HardwareHistoryEntry[]>([]);
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {
-    if (!selectedAgent && agents[0]?.id) setSelectedAgent(agents[0].id);
-  }, [agents, selectedAgent]);
+    const saved = localStorage.getItem('selectedAgent_monitor');
+    const isValidSaved = saved && agents.some(a => a.id === saved);
+
+    if (isValidSaved) {
+      setSelectedAgent(saved!);
+    } else if (agents.length > 0) {
+      setSelectedAgent(agents[0].id);
+      localStorage.setItem('selectedAgent_monitor', agents[0].id);
+    }
+  }, [agents]);
+
+  useEffect(() => {
+    if (selectedAgent) {
+      localStorage.setItem('selectedAgent_monitor', selectedAgent);
+    }
+  }, [selectedAgent]);
 
   useEffect(() => {
     if (!selectedAgent) return;
@@ -1484,16 +1672,16 @@ const StatCard: React.FC<{ title: string, value: string, change: string, icon: a
   </div>
 );
 
-const InstallCommandCard: React.FC<{ title: string, description: string, command: string, copied: boolean, onCopy: () => void }> = ({ title, description, command, copied, onCopy }) => (
+const InstallCommandCard: React.FC<{ title: string, description: string, command: string, copied: boolean, loading: boolean, onCopy: () => void }> = ({ title, description, command, copied, loading, onCopy }) => (
   <div className="rounded-[28px] border border-white/10 bg-white/[0.03] p-6 min-w-0">
     <div className="flex items-start justify-between gap-4 mb-4">
       <div>
         <h3 className="text-lg font-bold text-white">{title}</h3>
-        <p className="text-sm text-gray-400 mt-1">{description}</p>
+        <p className="text-sm text-gray-400 mt-1">{description} · token hết hạn sau 5 phút</p>
       </div>
-      <button onClick={onCopy} className="inline-flex items-center gap-2 rounded-xl bg-neon-blue px-4 py-2 text-sm font-bold text-black">
-        {copied ? <Check size={16} /> : <Copy size={16} />}
-        {copied ? 'Đã chép' : 'Sao chép'}
+      <button onClick={onCopy} disabled={loading} className="inline-flex items-center gap-2 rounded-xl bg-neon-blue px-4 py-2 text-sm font-bold text-black disabled:opacity-60">
+        {loading ? <Loader2 size={16} className="animate-spin" /> : copied ? <Check size={16} /> : <Copy size={16} />}
+        {loading ? 'Đang tạo' : copied ? 'Đã chép' : 'Tạo & sao chép'}
       </button>
     </div>
     <pre className="overflow-x-auto w-full rounded-2xl bg-black/40 p-4 text-xs text-neon-blue whitespace-nowrap">
@@ -1546,8 +1734,11 @@ const DocsPage: React.FC = () => (
         <h3 className="text-xl font-bold mb-6 flex items-center gap-2 text-neon-purple"><Network size={20} /> 2. Tạo Proxy (Tunnel)</h3>
         <div className="space-y-4 text-sm text-gray-300">
           <div>
-            <p className="font-bold text-white mb-1">HTTP Proxy (Wildcard Domain):</p>
-            <p>Sử dụng định dạng <code className="text-neon-blue">[subdomain].{import.meta.env.VITE_WILDCARD_DOMAIN || 'v1.ovncr.vn'}</code>. Hệ thống sẽ tự động cấp SSL/TLS ở lớp ngoài.</p>
+            <p className="font-bold text-white mb-1">HTTP Proxy (Subdomain hoặc Tên miền riêng):</p>
+            <p>Sử dụng Subdomain hệ thống <code className="text-neon-blue">[subdomain].{import.meta.env.VITE_WILDCARD_DOMAIN || 'v1.ovncr.vn'}</code> hoặc Tên miền riêng (Custom Domain). Hệ thống hỗ trợ sinh cấu hình Nginx Reverse Proxy và cấp phát chứng chỉ SSL/TLS miễn phí qua Let's Encrypt.</p>
+            <p className="text-xs text-gray-400 mt-2 border-t border-white/5 pt-2">
+              <strong className="text-neon-blue">Cấu hình mặc định tối ưu:</strong> Tự động cách ly cấu hình trong thư mục riêng biệt <code className="text-neon-blue">/etc/nginx/proxymanager.d/</code>. Hỗ trợ đầy đủ kết nối WebSockets, tối ưu tải file dung lượng lớn (lên tới 1GB), và tăng giới hạn timeout kết nối lên 300s để đảm bảo đường truyền ổn định.
+            </p>
           </div>
           <div>
             <p className="font-bold text-white mb-1">TCP/UDP Proxy:</p>

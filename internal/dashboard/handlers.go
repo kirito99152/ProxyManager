@@ -3,7 +3,11 @@ package dashboard
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -16,6 +20,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/kirito99152/ProxyManager/internal/api"
@@ -552,12 +557,64 @@ func (h *DashboardHandler) GetLogs(c *gin.Context) {
 
 // --- Install Script Handler ---
 
+const installTokenTTL = 5 * time.Minute
+
+func (h *DashboardHandler) CreateInstallToken(c *gin.Context) {
+	var payload struct {
+		OS string `json:"os" binding:"required"`
+	}
+	if err := c.ShouldBindJSON(&payload); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	targetOS := strings.ToLower(strings.TrimSpace(payload.OS))
+	if targetOS != "linux" && targetOS != "windows" {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error":     "unsupported os",
+			"supported": []string{"linux", "windows"},
+		})
+		return
+	}
+
+	token, err := newInstallToken()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to generate install token"})
+		return
+	}
+
+	expiresAt := time.Now().Add(installTokenTTL)
+	_, err = h.database.Exec(`
+		INSERT INTO install_tokens (token_hash, target_os, expires_at)
+		VALUES (?, ?, DATE_ADD(NOW(), INTERVAL 300 SECOND))
+	`, installTokenHash(token), targetOS)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to save install token"})
+		return
+	}
+
+	scriptURL := fmt.Sprintf("%s/api/v1/install/script?os=%s&token=%s", publicBaseURL(c), targetOS, token)
+	command := installCommandForOS(targetOS, scriptURL)
+	c.JSON(http.StatusCreated, gin.H{
+		"token":      token,
+		"url":        scriptURL,
+		"command":    command,
+		"expires_at": expiresAt.Format(time.RFC3339),
+		"expires_in": int(installTokenTTL.Seconds()),
+	})
+}
+
 func (h *DashboardHandler) GetInstallScript(c *gin.Context) {
 	targetOS := strings.ToLower(strings.TrimSpace(c.DefaultQuery("os", "")))
 
 	if targetOS == "" {
 		c.Header("Content-Type", "text/plain; charset=utf-8")
 		c.String(http.StatusOK, buildInstallInstructions(c))
+		return
+	}
+
+	if err := h.consumeInstallToken(c, targetOS); err != nil {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": err.Error()})
 		return
 	}
 
@@ -576,15 +633,65 @@ func (h *DashboardHandler) GetInstallScript(c *gin.Context) {
 	}
 }
 
+func (h *DashboardHandler) consumeInstallToken(c *gin.Context, targetOS string) error {
+	token := strings.TrimSpace(c.Query("token"))
+	if token == "" {
+		return errors.New("install token is required")
+	}
+
+	res, err := h.database.Exec(`
+		UPDATE install_tokens
+		SET used_at = NOW()
+		WHERE token_hash = ?
+		  AND target_os = ?
+		  AND used_at IS NULL
+		  AND expires_at > NOW()
+	`, installTokenHash(token), targetOS)
+	if err != nil {
+		return fmt.Errorf("failed to validate install token")
+	}
+
+	affected, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("failed to validate install token")
+	}
+	if affected != 1 {
+		return errors.New("install token is invalid, expired, already used, or not valid for this OS")
+	}
+	return nil
+}
+
+func newInstallToken() (string, error) {
+	buf := make([]byte, 32)
+	if _, err := rand.Read(buf); err != nil {
+		return "", err
+	}
+	return base64.RawURLEncoding.EncodeToString(buf), nil
+}
+
+func installTokenHash(token string) string {
+	sum := sha256.Sum256([]byte(token))
+	return hex.EncodeToString(sum[:])
+}
+
+func installCommandForOS(targetOS, scriptURL string) string {
+	switch targetOS {
+	case "windows":
+		return fmt.Sprintf(`powershell -NoProfile -ExecutionPolicy Bypass -Command "[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; iex (Invoke-WebRequest -UseBasicParsing -Uri '%s').Content"`, scriptURL)
+	default:
+		return fmt.Sprintf("curl -fsSL %s | sudo bash", scriptURL)
+	}
+}
+
 func buildInstallInstructions(c *gin.Context) string {
 	baseURL := publicBaseURL(c)
 	return fmt.Sprintf(`ProxyManager quick install
 
 Linux:
-curl -fsSL %s/api/v1/install/script?os=linux | sudo bash
+Generate a one-time install URL from the dashboard. The token expires after 5 minutes and is consumed when the script is downloaded.
 
 Windows (PowerShell):
-curl.exe -fsSL "%s/api/v1/install/script?os=windows" | powershell -NoProfile -ExecutionPolicy Bypass -
+Generate a one-time install URL from the dashboard. The token expires after 5 minutes and is consumed when the script is downloaded.
 
 Notes:
 - Agent binaries are served from %s/downloads/
@@ -593,7 +700,7 @@ Notes:
   - agent-linux-arm64
   - agent-windows-amd64.exe
   - agent-windows-arm64.exe
-`, baseURL, baseURL, baseURL)
+`, baseURL)
 }
 
 func buildLinuxInstallScript(c *gin.Context) string {
@@ -722,8 +829,9 @@ switch ($env:PROCESSOR_ARCHITECTURE) {
     $FrpFile = "frpc-windows-amd64.exe"
   }
   "ARM64" { 
-    $AgentFile = "agent-windows-arm64.exe"
-    $FrpFile = "frpc-windows-arm64.exe"
+    # Fallback to AMD64 (runs under built-in emulation on Windows 11/10 ARM64)
+    $AgentFile = "agent-windows-amd64.exe"
+    $FrpFile = "frpc-windows-amd64.exe"
   }
   default { throw "Unsupported architecture: $env:PROCESSOR_ARCHITECTURE" }
 }
@@ -737,15 +845,8 @@ Add-MpPreference -ExclusionPath $WorkDir -ErrorAction SilentlyContinue
 Write-Host "Downloading agent binary (v1.1.0)..."
 Invoke-WebRequest -Uri "$BaseUrl/downloads/$AgentFile" -OutFile "$WorkDir\agent.exe" -UseBasicParsing
 
-$FRP_VER = "0.68.0"
-Write-Host "Downloading frpc v$FRP_VER from official GitHub..."
-$ZipFile = "$WorkDir\frp.zip"
-Invoke-WebRequest -Uri "https://github.com/fatedier/frp/releases/download/v$FRP_VER/frp_${FRP_VER}_windows_amd64.zip" -OutFile $ZipFile -UseBasicParsing
-Expand-Archive -Path $ZipFile -DestinationPath "$WorkDir\temp" -Force
-$ExtractedDir = Get-ChildItem -Path "$WorkDir\temp" -Directory | Select-Object -First 1
-Move-Item -Path "$($ExtractedDir.FullName)\frpc.exe" -Destination "$WorkDir\frpc.exe" -Force
-Remove-Item -Path "$WorkDir\temp" -Recurse -Force
-Remove-Item -Path $ZipFile -Force
+Write-Host "Downloading frpc binary (v0.68.0)..."
+Invoke-WebRequest -Uri "$BaseUrl/downloads/$FrpFile" -OutFile "$WorkDir\frpc.exe" -UseBasicParsing
 
 [Environment]::SetEnvironmentVariable("SERVER_ADDR", $ServerAddr, "Machine")
 [Environment]::SetEnvironmentVariable("AGENT_AUTH_TOKEN", $AgentToken, "Machine")
@@ -845,10 +946,60 @@ func (h *DashboardHandler) SetupDomainNginx(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
-	if err := writeDomainNginxConfig(strings.TrimSpace(payload.Domain)); err != nil {
+	domain := strings.TrimSpace(payload.Domain)
+	if err := writeDomainNginxConfig(domain); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
+
+	// Tự động kích hoạt quy trình xin chứng chỉ SSL trong background nếu tên miền đã trỏ về IP máy chủ!
+	go func(dom string) {
+		log.Printf("[Auto-SSL] Bắt đầu tiến trình tự động cấu hình SSL cho %s...", dom)
+
+		// Nếu chứng chỉ đã tồn tại trên đĩa, sử dụng luôn chứng chỉ cũ, không xin chứng chỉ mới!
+		if certExists(dom) {
+			log.Printf("[Auto-SSL] Chứng chỉ SSL cho %s đã tồn tại trên VPS. Tự động áp dụng chứng chỉ cũ, không xin mới.", dom)
+			_ = writeDomainNginxConfig(dom)
+			return
+		}
+
+		// Cho Nginx 2 giây để hoàn tất khởi động/reload
+		time.Sleep(2 * time.Second)
+
+		// Thử kiểm tra DNS tối đa 6 lần (mỗi lần cách nhau 10 giây) để chờ tên miền phân giải về đúng VPS IP
+		var isPointed bool
+		for attempt := 1; attempt <= 6; attempt++ {
+			status := buildDomainStatus(context.Background(), dom)
+			if status.Pointed {
+				isPointed = true
+				log.Printf("[Auto-SSL] Kiểm tra DNS thành công ở lần thứ %d. Tên miền %s đã trỏ về VPS IP.", attempt, dom)
+				break
+			}
+			log.Printf("[Auto-SSL] Lần %d: Tên miền %s chưa trỏ về VPS IP. Chờ 10 giây để thử lại...", attempt, dom)
+			time.Sleep(10 * time.Second)
+		}
+
+		if !isPointed {
+			log.Printf("[Auto-SSL] Tên miền %s chưa phân giải về VPS IP sau 1 phút. Huỷ tiến trình tự động xin SSL.", dom)
+			return
+		}
+
+		// Gọi Certbot để tự động xin chứng chỉ Let's Encrypt
+		log.Printf("[Auto-SSL] Tiến hành chạy Certbot tự động đăng ký SSL cho %s...", dom)
+		if err := runCertbot(context.Background(), dom); err != nil {
+			log.Printf("[Auto-SSL] Đăng ký chứng chỉ SSL cho %s thất bại: %v", dom, err)
+			return
+		}
+
+		// Xin cert thành công, gọi lại writeDomainNginxConfig để tự động nâng cấp cấu hình Nginx lên HTTPS
+		log.Printf("[Auto-SSL] Đăng ký SSL thành công cho %s! Tiến hành nâng cấp cấu hình Nginx sang HTTPS...", dom)
+		if err := writeDomainNginxConfig(dom); err != nil {
+			log.Printf("[Auto-SSL] Nâng cấp cấu hình Nginx HTTPS cho %s thất bại: %v", dom, err)
+		} else {
+			log.Printf("[Auto-SSL] Đã tự động kích hoạt HTTPS hoàn toàn thành công cho %s!", dom)
+		}
+	}(domain)
+
 	c.JSON(http.StatusOK, gin.H{"message": "Nginx config generated and reloaded", "status": buildDomainStatus(c.Request.Context(), payload.Domain)})
 }
 
@@ -900,11 +1051,17 @@ func writeDomainNginxConfig(domain string) error {
 	}
 	confDir := strings.TrimSpace(os.Getenv("NGINX_PROXY_CONF_DIR"))
 	if confDir == "" {
-		confDir = "/etc/nginx/conf.d"
+		confDir = "/etc/nginx/proxymanager.d"
 	}
 	if err := os.MkdirAll(confDir, 0755); err != nil {
 		return fmt.Errorf("failed to create nginx config dir: %w", err)
 	}
+
+	// Tự động thêm dòng include vào nginx.conf nếu confDir là thư mục mặc định mới
+	if confDir == "/etc/nginx/proxymanager.d" {
+		_ = ensureNginxConfigIncludesProxyManager()
+	}
+
 	confPath := filepath.Join(confDir, "proxymanager-"+domain+".conf")
 	content := renderDomainNginxConfig(domain)
 	if err := os.WriteFile(confPath, []byte(content), 0644); err != nil {
@@ -932,15 +1089,26 @@ func renderDomainNginxConfig(domain string) string {
     }
 
     location / {
+        # Cấu hình Proxy tự động bởi ProxyManager
+        # Hỗ trợ: WebSockets, Tải file dung lượng lớn (Heavy Upload), Timeout 300s
         proxy_pass http://127.0.0.1:18081;
         proxy_http_version 1.1;
+        
+        # Hỗ trợ WebSocket
         proxy_set_header Upgrade $http_upgrade;
         proxy_set_header Connection "upgrade";
+        
+        # Tiêu đề Header tiêu chuẩn
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto $scheme;
-        proxy_read_timeout 86400;
+        
+        # Tối ưu tải file nặng và Timeout 300s
+        client_max_body_size 1024M;
+        proxy_read_timeout 300s;
+        proxy_send_timeout 300s;
+        proxy_connect_timeout 300s;
     }
 }
 `, domain)
@@ -966,15 +1134,26 @@ server {
     ssl_certificate_key %s;
 
     location / {
+        # Cấu hình Proxy tự động bởi ProxyManager
+        # Hỗ trợ: WebSockets, Tải file dung lượng lớn (Heavy Upload), Timeout 300s
         proxy_pass http://127.0.0.1:18081;
         proxy_http_version 1.1;
+        
+        # Hỗ trợ WebSocket
         proxy_set_header Upgrade $http_upgrade;
         proxy_set_header Connection "upgrade";
+        
+        # Tiêu đề Header tiêu chuẩn
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto $scheme;
-        proxy_read_timeout 86400;
+        
+        # Tối ưu tải file nặng và Timeout 300s
+        client_max_body_size 1024M;
+        proxy_read_timeout 300s;
+        proxy_send_timeout 300s;
+        proxy_connect_timeout 300s;
     }
 }
 `, domain, domain, sslCert, sslKey)
@@ -1019,7 +1198,7 @@ func validateDomainName(domain string) error {
 func nginxConfigExists(domain string) bool {
 	confDir := strings.TrimSpace(os.Getenv("NGINX_PROXY_CONF_DIR"))
 	if confDir == "" {
-		confDir = "/etc/nginx/conf.d"
+		confDir = "/etc/nginx/proxymanager.d"
 	}
 	_, err := os.Stat(filepath.Join(confDir, "proxymanager-"+domain+".conf"))
 	return err == nil
@@ -1028,4 +1207,27 @@ func nginxConfigExists(domain string) bool {
 func certExists(domain string) bool {
 	_, err := os.Stat(fmt.Sprintf("/etc/letsencrypt/live/%s/fullchain.pem", domain))
 	return err == nil
+}
+
+// ensureNginxConfigIncludesProxyManager tự động thêm dòng include vào nginx.conf nếu chưa có
+func ensureNginxConfigIncludesProxyManager() error {
+	nginxConfPath := "/etc/nginx/nginx.conf"
+	contentBytes, err := os.ReadFile(nginxConfPath)
+	if err != nil {
+		return fmt.Errorf("failed to read nginx.conf: %w", err)
+	}
+	content := string(contentBytes)
+	includeLine := "include /etc/nginx/proxymanager.d/*.conf;"
+	if strings.Contains(content, includeLine) {
+		return nil // Đã tồn tại cấu hình
+	}
+
+	// Chèn ngay sau dòng include mặc định của nginx
+	targetLine := "include /etc/nginx/conf.d/*.conf;"
+	if strings.Contains(content, targetLine) {
+		newContent := strings.Replace(content, targetLine, targetLine+"\n        "+includeLine, 1)
+		return os.WriteFile(nginxConfPath, []byte(newContent), 0644)
+	}
+
+	return fmt.Errorf("target include line not found in nginx.conf to inject proxymanager.d")
 }

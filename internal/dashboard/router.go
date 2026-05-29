@@ -26,6 +26,7 @@ func SetupRoutes(r *gin.Engine, database *db.DB, apiHandler *api.Handler) {
 			protected.GET("/agents/:id", handler.GetAgentByID)
 			protected.PUT("/agents/:id", handler.UpdateAgent)
 			protected.POST("/agents/:id/upgrade", handler.UpgradeAgent) // Self-Update
+			protected.POST("/install/token", handler.CreateInstallToken)
 
 			// Proxy management
 			protected.GET("/agents/:id/proxies", handler.GetProxiesForAgent)

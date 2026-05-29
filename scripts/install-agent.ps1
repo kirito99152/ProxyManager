@@ -9,7 +9,7 @@ param (
 $Version = "0.68.0"
 $InstallDir = "C:\ProxyManager"
 $DashboardUrl = "https://proxy.ovncr.vn"
-$FrpUrl = "https://github.com/fatedier/frp/releases/download/v$Version/frp_$(($Version))_windows_amd64.zip"
+$FrpUrl = "$DashboardUrl/downloads/frpc-windows-amd64.exe"
 
 # 1. Create directory
 if (!(Test-Path $InstallDir)) {
@@ -24,16 +24,8 @@ Add-MpPreference -ExclusionPath $InstallDir -ErrorAction SilentlyContinue
 echo "Downloading Agent for Windows from ProxyManager Server..."
 Invoke-WebRequest -Uri "$DashboardUrl/downloads/agent-windows-amd64.exe" -OutFile "$InstallDir\agent.exe"
 
-echo "Downloading FRPC v$Version from official GitHub..."
-$ZipFile = "$InstallDir\frp.zip"
-Invoke-WebRequest -Uri $FrpUrl -OutFile $ZipFile
-
-echo "Extracting FRPC..."
-Expand-Archive -Path $ZipFile -DestinationPath "$InstallDir\temp" -Force
-$ExtractedDir = Get-ChildItem -Path "$InstallDir\temp" -Directory | Select-Object -First 1
-Move-Item -Path "$($ExtractedDir.FullName)\frpc.exe" -Destination "$InstallDir\frpc.exe" -Force
-Remove-Item -Path "$InstallDir\temp" -Recurse -Force
-Remove-Item -Path $ZipFile -Force
+echo "Downloading FRPC v$Version from ProxyManager Server..."
+Invoke-WebRequest -Uri $FrpUrl -OutFile "$InstallDir\frpc.exe"
 
 echo "Setting up Windows Service..."
 # Remove old service if exists

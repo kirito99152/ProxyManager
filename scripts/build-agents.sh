@@ -14,6 +14,19 @@ GOOS=linux GOARCH=arm64 go build -o "$DOWNLOADS_DIR/agent-linux-arm64" ./cmd/age
 echo "-> Windows AMD64"
 GOOS=windows GOARCH=amd64 go build -o "$DOWNLOADS_DIR/agent-windows-amd64.exe" ./cmd/agent
 
+echo "-> Windows AMD64 FRPC from Source"
+FRP_SRC_DIR="$PROJECT_DIR/tmp/frp_source"
+if [ ! -d "$FRP_SRC_DIR" ]; then
+    echo "Cloning fatedier/frp repository at tag v0.68.0..."
+    mkdir -p "$PROJECT_DIR/tmp"
+    git clone --depth 1 --branch v0.68.0 https://github.com/fatedier/frp.git "$FRP_SRC_DIR"
+fi
+
+echo "Building custom frpc-windows-amd64.exe..."
+cd "$FRP_SRC_DIR"
+GOOS=windows GOARCH=amd64 go build -tags noweb -ldflags "-s -w" -o "$DOWNLOADS_DIR/frpc-windows-amd64.exe" ./cmd/frpc
+cd "$PROJECT_DIR"
+
 echo "Creating Windows ZIP package..."
 TMP_DIR="/tmp/win_agent_build"
 mkdir -p "$TMP_DIR"
