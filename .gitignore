@@ -5,7 +5,6 @@ cmd/agent/agent
 
 # Go dependencies
 vendor/
-go.sum
 
 # Environment variables
 .env

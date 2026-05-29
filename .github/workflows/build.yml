@@ -6,6 +6,9 @@ on:
   pull_request:
     branches: [ "main" ]
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -16,6 +19,7 @@ jobs:
       uses: actions/setup-go@v5
       with:
         go-version: '1.22'
+        cache-dependency-path: go.sum
 
     - name: Install Protoc
       uses: arduino/setup-protoc@v3
@@ -37,11 +41,11 @@ jobs:
     - name: Build Server
       run: |
         mkdir -p bin
-        go build -v -o bin/server cmd/server/main.go
+        go build -v -o bin/server ./cmd/server
 
     - name: Build Agent
       run: |
-        go build -v -o bin/agent cmd/agent/main.go
+        go build -v -o bin/agent ./cmd/agent
 
     - name: Upload Binaries
       uses: actions/upload-artifact@v4
