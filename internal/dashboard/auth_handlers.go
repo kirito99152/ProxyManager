@@ -4,9 +4,11 @@ import (
 	"database/sql"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/kirito99152/ProxyManager/internal/auth"
+	"github.com/kirito99152/ProxyManager/internal/db"
 )
 
 type LoginRequest struct {
@@ -53,12 +55,75 @@ func (h *DashboardHandler) Login(c *gin.Context) {
 	})
 }
 
-// AuthMiddleware validates JWT token from Authorization header
-func AuthMiddleware() gin.HandlerFunc {
+// AuthMiddleware validates JWT token from Authorization header or API Key from X-API-Key / Bearer header
+func AuthMiddleware(database *db.DB) gin.HandlerFunc {
 	return func(c *gin.Context) {
+		// 1. Check for API Key first (X-API-Key or Bearer pm_live_...)
+		apiKey := c.GetHeader("X-API-Key")
 		authHeader := c.GetHeader("Authorization")
+		if apiKey == "" && strings.HasPrefix(authHeader, "Bearer pm_live_") {
+			apiKey = strings.TrimPrefix(authHeader, "Bearer ")
+		}
+
+		if apiKey != "" {
+			keyHash := auth.HashAPIKey(apiKey)
+			var (
+				keyID     int
+				userID    int
+				keyName   string
+				role      string
+				scopes    string
+				isActive  bool
+				expiresAt *time.Time
+				username  string
+			)
+			err := database.QueryRow(`
+				SELECT a.id, a.user_id, a.name, a.role, a.scopes, a.is_active, a.expires_at, u.username
+				FROM api_keys a
+				JOIN users u ON a.user_id = u.id
+				WHERE a.key_hash = ?
+			`, keyHash).Scan(&keyID, &userID, &keyName, &role, &scopes, &isActive, &expiresAt, &username)
+
+			if err != nil {
+				if err == sql.ErrNoRows {
+					c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid API key"})
+				} else {
+					c.JSON(http.StatusInternalServerError, gin.H{"error": "Database error validating API key"})
+				}
+				c.Abort()
+				return
+			}
+
+			if !isActive {
+				c.JSON(http.StatusUnauthorized, gin.H{"error": "API key is deactivated"})
+				c.Abort()
+				return
+			}
+
+			if expiresAt != nil && time.Now().After(*expiresAt) {
+				c.JSON(http.StatusUnauthorized, gin.H{"error": "API key has expired"})
+				c.Abort()
+				return
+			}
+
+			// Update last_used_at in background
+			go func(id int) {
+				_, _ = database.Exec("UPDATE api_keys SET last_used_at = NOW() WHERE id = ?", id)
+			}(keyID)
+
+			c.Set("username", username)
+			c.Set("role", role)
+			c.Set("user_id", userID)
+			c.Set("auth_type", "api_key")
+			c.Set("api_key_id", keyID)
+			c.Set("scopes", scopes)
+			c.Next()
+			return
+		}
+
+		// 2. Fallback to standard JWT token
 		if authHeader == "" {
-			c.JSON(http.StatusUnauthorized, gin.H{"error": "Authorization header required"})
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "Authorization header or X-API-Key required"})
 			c.Abort()
 			return
 		}
@@ -81,6 +146,7 @@ func AuthMiddleware() gin.HandlerFunc {
 		// Store user info in context
 		c.Set("username", claims.Username)
 		c.Set("role", claims.Role)
+		c.Set("auth_type", "jwt")
 		c.Next()
 	}
 }

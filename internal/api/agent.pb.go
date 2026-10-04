@@ -301,6 +301,9 @@ type HardwareStats struct {
 	DiskFree      uint64                 `protobuf:"varint,4,opt,name=disk_free,json=diskFree,proto3" json:"disk_free,omitempty"`
 	NetIn         uint64                 `protobuf:"varint,5,opt,name=net_in,json=netIn,proto3" json:"net_in,omitempty"`
 	NetOut        uint64                 `protobuf:"varint,6,opt,name=net_out,json=netOut,proto3" json:"net_out,omitempty"`
+	CpuTemp       float64                `protobuf:"fixed64,7,opt,name=cpu_temp,json=cpuTemp,proto3" json:"cpu_temp,omitempty"`
+	DiskTotal     uint64                 `protobuf:"varint,8,opt,name=disk_total,json=diskTotal,proto3" json:"disk_total,omitempty"`
+	DiskUsed      uint64                 `protobuf:"varint,9,opt,name=disk_used,json=diskUsed,proto3" json:"disk_used,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -373,6 +376,27 @@ func (x *HardwareStats) GetNetIn() uint64 {
 func (x *HardwareStats) GetNetOut() uint64 {
 	if x != nil {
 		return x.NetOut
+	}
+	return 0
+}
+
+func (x *HardwareStats) GetCpuTemp() float64 {
+	if x != nil {
+		return x.CpuTemp
+	}
+	return 0
+}
+
+func (x *HardwareStats) GetDiskTotal() uint64 {
+	if x != nil {
+		return x.DiskTotal
+	}
+	return 0
+}
+
+func (x *HardwareStats) GetDiskUsed() uint64 {
+	if x != nil {
+		return x.DiskUsed
 	}
 	return 0
 }
@@ -656,7 +680,7 @@ func (x *AgentID) GetAgentId() string {
 type Command struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Action        string                 `protobuf:"bytes,1,opt,name=action,proto3" json:"action,omitempty"`   // "RELOAD_FRPC", "UPGRADE_AGENT", "RESTART_AGENT", "REMOTE_EXEC"
-	Payload       string                 `protobuf:"bytes,2,opt,name=payload,proto3" json:"payload,omitempty"` // config hoặc script shell
+	Payload       string                 `protobuf:"bytes,2,opt,name=payload,proto3" json:"payload,omitempty"` // config or shell script
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -732,14 +756,18 @@ const file_proto_agent_proto_rawDesc = "" +
 	"\amessage\x18\x02 \x01(\tR\amessage\x12%\n" +
 	"\x0elatest_version\x18\x03 \x01(\tR\rlatestVersion\x12\x1f\n" +
 	"\vupgrade_url\x18\x04 \x01(\tR\n" +
-	"upgradeUrl\"\xb1\x01\n" +
+	"upgradeUrl\"\x88\x02\n" +
 	"\rHardwareStats\x12\x1b\n" +
 	"\tcpu_usage\x18\x01 \x01(\x01R\bcpuUsage\x12\x1b\n" +
 	"\tram_total\x18\x02 \x01(\x04R\bramTotal\x12\x19\n" +
 	"\bram_used\x18\x03 \x01(\x04R\aramUsed\x12\x1b\n" +
 	"\tdisk_free\x18\x04 \x01(\x04R\bdiskFree\x12\x15\n" +
 	"\x06net_in\x18\x05 \x01(\x04R\x05netIn\x12\x17\n" +
-	"\anet_out\x18\x06 \x01(\x04R\x06netOut\"9\n" +
+	"\anet_out\x18\x06 \x01(\x04R\x06netOut\x12\x19\n" +
+	"\bcpu_temp\x18\a \x01(\x01R\acpuTemp\x12\x1d\n" +
+	"\n" +
+	"disk_total\x18\b \x01(\x04R\tdiskTotal\x12\x1b\n" +
+	"\tdisk_used\x18\t \x01(\x04R\bdiskUsed\"9\n" +
 	"\vServiceInfo\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x16\n" +
 	"\x06status\x18\x02 \x01(\tR\x06status\"]\n" +

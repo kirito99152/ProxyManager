@@ -29,13 +29,13 @@ const (
 //
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 type AgentServiceClient interface {
-	// Agent đăng ký với Server khi khởi chạy lần đầu
+	// Agent registers with Server upon first launch
 	Register(ctx context.Context, in *RegisterRequest, opts ...grpc.CallOption) (*RegisterResponse, error)
-	// Agent gửi báo cáo định kỳ về tình trạng hệ thống và port
+	// Agent sends periodic reports on system status and ports
 	Heartbeat(ctx context.Context, in *ReportRequest, opts ...grpc.CallOption) (*ReportResponse, error)
-	// Agent gửi log hệ thống về Server
+	// Agent sends system logs to Server
 	ForwardLog(ctx context.Context, in *LogEntry, opts ...grpc.CallOption) (*LogResponse, error)
-	// Server gửi lệnh điều khiển tới Agent
+	// Server sends control commands to Agent
 	CommandStream(ctx context.Context, in *AgentID, opts ...grpc.CallOption) (grpc.ServerStreamingClient[Command], error)
 }
 
@@ -100,13 +100,13 @@ type AgentService_CommandStreamClient = grpc.ServerStreamingClient[Command]
 // All implementations must embed UnimplementedAgentServiceServer
 // for forward compatibility.
 type AgentServiceServer interface {
-	// Agent đăng ký với Server khi khởi chạy lần đầu
+	// Agent registers with Server upon first launch
 	Register(context.Context, *RegisterRequest) (*RegisterResponse, error)
-	// Agent gửi báo cáo định kỳ về tình trạng hệ thống và port
+	// Agent sends periodic reports on system status and ports
 	Heartbeat(context.Context, *ReportRequest) (*ReportResponse, error)
-	// Agent gửi log hệ thống về Server
+	// Agent sends system logs to Server
 	ForwardLog(context.Context, *LogEntry) (*LogResponse, error)
-	// Server gửi lệnh điều khiển tới Agent
+	// Server sends control commands to Agent
 	CommandStream(*AgentID, grpc.ServerStreamingServer[Command]) error
 	mustEmbedUnimplementedAgentServiceServer()
 }

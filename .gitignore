@@ -1,14 +1,46 @@
-# Binaries
+# Binaries & Executables
 bin/
+server
+agent
+agent-*
+proxymanager-server
+proxymanager-agent*
 cmd/server/server
 cmd/agent/agent
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+
+# Downloads & Built Agent Packages
+downloads/*
+!downloads/.gitkeep
+
+# Archives & Downloaded Packages
+*.tar.gz
+*.tar.gz.*
+*.tgz
+*.zip
+*.gz
+*.7z
+*.rar
+
+# Database Backups & Dumps
+backups/*.sql
+*.sql.gz
+*.dump
 
 # Go dependencies
 vendor/
 
-# Environment variables
+# Environment variables & secrets
 .env
 *.local
+*.pem
+*.key
 
 # FRP related
 frpc
@@ -22,9 +54,23 @@ frps
 tmp/
 dist/
 docs/
+coverage.out
+*.prof
 
-# IDE files
+# Frontend build & dependencies
+node_modules/
+dashboard/node_modules/
+dashboard/dist/
+
+# Analysis & Local Tools
+graphify-out/
+
+# IDE & OS files
 .vscode/
 .idea/
 *.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
 technical.md

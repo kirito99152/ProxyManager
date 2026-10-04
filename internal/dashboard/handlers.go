@@ -20,28 +20,46 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gin-gonic/gin"
+	mysqlDriver "github.com/go-sql-driver/mysql"
 	"github.com/kirito99152/ProxyManager/internal/api"
 	"github.com/kirito99152/ProxyManager/internal/config"
 	"github.com/kirito99152/ProxyManager/internal/db"
+	"github.com/kirito99152/ProxyManager/internal/mailer"
 	"github.com/kirito99152/ProxyManager/internal/models"
 	psnet "github.com/shirou/gopsutil/v3/net"
 	"github.com/shirou/gopsutil/v3/process"
+	"golang.org/x/crypto/bcrypt"
 )
 
 // Re-combining all handler logic into one file after git reset
 type DashboardHandler struct {
-	database   *db.DB
-	apiHandler *api.Handler
+	database      *db.DB
+	apiHandler    *api.Handler
+	alertManager  *mailer.AlertManager
+	proxyCreateMu sync.Mutex
 }
 
-func NewDashboardHandler(database *db.DB, apiHandler *api.Handler) *DashboardHandler {
-	return &DashboardHandler{database: database, apiHandler: apiHandler}
+func NewDashboardHandler(database *db.DB, apiHandler *api.Handler, alertManager *mailer.AlertManager) *DashboardHandler {
+	return &DashboardHandler{database: database, apiHandler: apiHandler, alertManager: alertManager}
+}
+
+type installNetworkSettings struct {
+	PreferTailscale         bool
+	ControlPlaneTailscaleIP string
+	HeadscaleServerURL      string
+	HeadscaleAuthKey        string
 }
 
 // --- Agent Handlers ---
+
+type AgentResponse struct {
+	models.Agent
+	Managers []models.ManagerInfo `json:"managers"`
+}
 
 func (h *DashboardHandler) GetAgents(c *gin.Context) {
 	var agents []models.Agent
@@ -50,7 +68,44 @@ func (h *DashboardHandler) GetAgents(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to fetch agents"})
 		return
 	}
-	c.JSON(http.StatusOK, agents)
+
+	type managerRow struct {
+		AgentID    string  `db:"agent_id"`
+		UserID     int     `db:"user_id"`
+		Username   string  `db:"username"`
+		Email      *string `db:"email"`
+		IsVerified bool    `db:"is_verified"`
+	}
+	var rows []managerRow
+	_ = h.database.Select(&rows, `
+		SELECT am.agent_id, u.id as user_id, u.username, u.email, u.is_verified 
+		FROM agent_managers am 
+		JOIN users u ON am.user_id = u.id
+	`)
+
+	managersMap := make(map[string][]models.ManagerInfo)
+	for _, r := range rows {
+		managersMap[r.AgentID] = append(managersMap[r.AgentID], models.ManagerInfo{
+			UserID:     r.UserID,
+			Username:   r.Username,
+			Email:      r.Email,
+			IsVerified: r.IsVerified,
+		})
+	}
+
+	response := make([]AgentResponse, len(agents))
+	for i, a := range agents {
+		managers := managersMap[a.ID]
+		if managers == nil {
+			managers = []models.ManagerInfo{}
+		}
+		response[i] = AgentResponse{
+			Agent:    a,
+			Managers: managers,
+		}
+	}
+
+	c.JSON(http.StatusOK, response)
 }
 
 func (h *DashboardHandler) GetAgentByID(c *gin.Context) {
@@ -65,7 +120,104 @@ func (h *DashboardHandler) GetAgentByID(c *gin.Context) {
 		}
 		return
 	}
-	c.JSON(http.StatusOK, agent)
+
+	var managers []models.ManagerInfo
+	_ = h.database.Select(&managers, `
+		SELECT u.id as user_id, u.username, u.email, u.is_verified 
+		FROM agent_managers am 
+		JOIN users u ON am.user_id = u.id 
+		WHERE am.agent_id = ?
+	`, id)
+	if managers == nil {
+		managers = []models.ManagerInfo{}
+	}
+
+	c.JSON(http.StatusOK, AgentResponse{
+		Agent:    agent,
+		Managers: managers,
+	})
+}
+
+func (h *DashboardHandler) GetAgentManagers(c *gin.Context) {
+	agentID := c.Param("id")
+	var managers []models.ManagerInfo
+	err := h.database.Select(&managers, `
+		SELECT u.id as user_id, u.username, u.email, u.is_verified 
+		FROM agent_managers am 
+		JOIN users u ON am.user_id = u.id 
+		WHERE am.agent_id = ?
+	`, agentID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to fetch managers"})
+		return
+	}
+	if managers == nil {
+		managers = []models.ManagerInfo{}
+	}
+	c.JSON(http.StatusOK, managers)
+}
+
+type SetAgentManagersRequest struct {
+	UserIDs []int `json:"user_ids"`
+}
+
+func (h *DashboardHandler) SetAgentManagers(c *gin.Context) {
+	agentID := c.Param("id")
+	var req SetAgentManagersRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Dữ liệu không hợp lệ"})
+		return
+	}
+
+	// Validate agent exists
+	var count int
+	if err := h.database.Get(&count, "SELECT COUNT(*) FROM agents WHERE id = ?", agentID); err != nil || count == 0 {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Không tìm thấy máy chủ"})
+		return
+	}
+
+	// If user_ids provided, ensure all of them are verified members
+	if len(req.UserIDs) > 0 {
+		for _, uid := range req.UserIDs {
+			var isVerified bool
+			var email sql.NullString
+			err := h.database.QueryRow("SELECT is_verified, email FROM users WHERE id = ?", uid).Scan(&isVerified, &email)
+			if err != nil {
+				c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("Thành viên ID %d không tồn tại", uid)})
+				return
+			}
+			if !isVerified || !email.Valid || strings.TrimSpace(email.String) == "" {
+				c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("Thành viên ID %d chưa xác thực email, không thể gán vào máy chủ", uid)})
+				return
+			}
+		}
+	}
+
+	tx, err := h.database.Beginx()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Lỗi khởi tạo transaction"})
+		return
+	}
+	defer tx.Rollback()
+
+	if _, err := tx.Exec("DELETE FROM agent_managers WHERE agent_id = ?", agentID); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Lỗi khi xóa người quản lý cũ"})
+		return
+	}
+
+	for _, uid := range req.UserIDs {
+		if _, err := tx.Exec("INSERT INTO agent_managers (agent_id, user_id) VALUES (?, ?)", agentID, uid); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Lỗi khi gán người quản lý mới"})
+			return
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Lỗi khi lưu người quản lý"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"message": "Cập nhật danh sách người quản lý máy thành công"})
 }
 
 func (h *DashboardHandler) UpdateAgent(c *gin.Context) {
@@ -130,6 +282,9 @@ func (h *DashboardHandler) CreateProxy(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
+
+	h.proxyCreateMu.Lock()
+	defer h.proxyCreateMu.Unlock()
 
 	// 1. Fetch the agent to get its hostname
 	var agent models.Agent
@@ -221,6 +376,11 @@ func (h *DashboardHandler) CreateProxy(c *gin.Context) {
 
 	result, err := h.database.NamedExec("INSERT INTO proxies (agent_id, name, proxy_type, local_ip, local_port, remote_port, custom_domain, status) VALUES (:agent_id, :name, :proxy_type, :local_ip, :local_port, :remote_port, :custom_domain, :status)", &proxy)
 	if err != nil {
+		var mysqlErr *mysqlDriver.MySQLError
+		if errors.As(err, &mysqlErr) && mysqlErr.Number == 1062 {
+			c.JSON(http.StatusConflict, gin.H{"error": "Tên proxy hoặc cấu hình này đã tồn tại trong hệ thống (Duplicate entry)"})
+			return
+		}
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create proxy: " + err.Error()})
 		return
 	}
@@ -469,20 +629,18 @@ type SettingPayload struct {
 }
 
 func (h *DashboardHandler) GetSettings(c *gin.Context) {
-	var settings []map[string]interface{}
-	rows, err := h.database.Queryx("SELECT `key`, `value` FROM settings")
+	type SettingItem struct {
+		Key   string `json:"key" db:"key"`
+		Value string `json:"value" db:"value"`
+	}
+	var settings []SettingItem
+	err := h.database.Select(&settings, "SELECT `key`, `value` FROM settings")
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to fetch settings"})
 		return
 	}
-	defer rows.Close()
-	for rows.Next() {
-		result := make(map[string]interface{})
-		rows.MapScan(result)
-		if b, ok := result["value"].([]byte); ok {
-			result["value"] = string(b)
-		}
-		settings = append(settings, result)
+	if settings == nil {
+		settings = []SettingItem{}
 	}
 	c.JSON(http.StatusOK, settings)
 }
@@ -499,6 +657,61 @@ func (h *DashboardHandler) UpdateSetting(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"message": "Setting updated"})
+}
+
+func (h *DashboardHandler) installNetworkSettings(c *gin.Context) installNetworkSettings {
+	settings := installNetworkSettings{
+		PreferTailscale:         true,
+		ControlPlaneTailscaleIP: firstNonEmpty(os.Getenv("CONTROL_PLANE_TAILSCALE_IP"), "100.64.0.9"),
+		HeadscaleServerURL:      firstNonEmpty(os.Getenv("HEADSCALE_SERVER_URL"), "https://vpn.c500.net"),
+		HeadscaleAuthKey:        os.Getenv("HEADSCALE_AUTH_KEY"),
+	}
+
+	rows, err := h.database.Queryx("SELECT `key`, `value` FROM settings WHERE `key` IN ('install_prefer_tailscale', 'control_plane_tailscale_ip', 'headscale_server_url', 'headscale_auth_key')")
+	if err == nil {
+		defer rows.Close()
+		for rows.Next() {
+			var key, value string
+			if err := rows.Scan(&key, &value); err != nil {
+				continue
+			}
+			value = strings.TrimSpace(value)
+			switch key {
+			case "install_prefer_tailscale":
+				settings.PreferTailscale = value == "" || strings.EqualFold(value, "true") || value == "1" || strings.EqualFold(value, "yes")
+			case "control_plane_tailscale_ip":
+				if value != "" {
+					settings.ControlPlaneTailscaleIP = value
+				}
+			case "headscale_server_url":
+				if value != "" {
+					settings.HeadscaleServerURL = value
+				}
+			case "headscale_auth_key":
+				if value != "" {
+					settings.HeadscaleAuthKey = value
+				}
+			}
+		}
+	}
+
+	// Dynamic override via query parameter
+	if c != nil {
+		if tsParam := c.Query("tailscale"); tsParam != "" {
+			settings.PreferTailscale = strings.EqualFold(tsParam, "true") || tsParam == "1" || strings.EqualFold(tsParam, "yes")
+		}
+	}
+
+	return settings
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return strings.TrimSpace(value)
+		}
+	}
+	return ""
 }
 
 // --- Statistics & Logs Handlers ---
@@ -559,6 +772,19 @@ func (h *DashboardHandler) GetLogs(c *gin.Context) {
 
 const installTokenTTL = 5 * time.Minute
 
+func newEmergencySecretKey() (string, string, error) {
+	buf := make([]byte, 18)
+	if _, err := rand.Read(buf); err != nil {
+		return "", "", err
+	}
+	secretKey := "pm_sec_" + base64.RawURLEncoding.EncodeToString(buf)
+	hashBytes, err := bcrypt.GenerateFromPassword([]byte(secretKey), 12)
+	if err != nil {
+		return "", "", err
+	}
+	return secretKey, string(hashBytes), nil
+}
+
 func (h *DashboardHandler) CreateInstallToken(c *gin.Context) {
 	var payload struct {
 		OS string `json:"os" binding:"required"`
@@ -583,11 +809,17 @@ func (h *DashboardHandler) CreateInstallToken(c *gin.Context) {
 		return
 	}
 
+	secretKey, recoveryHash, err := newEmergencySecretKey()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to generate emergency secret key"})
+		return
+	}
+
 	expiresAt := time.Now().Add(installTokenTTL)
 	_, err = h.database.Exec(`
-		INSERT INTO install_tokens (token_hash, target_os, expires_at)
-		VALUES (?, ?, DATE_ADD(NOW(), INTERVAL 300 SECOND))
-	`, installTokenHash(token), targetOS)
+		INSERT INTO install_tokens (token_hash, target_os, recovery_hash, expires_at)
+		VALUES (?, ?, ?, DATE_ADD(NOW(), INTERVAL 300 SECOND))
+	`, installTokenHash(token), targetOS, recoveryHash)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to save install token"})
 		return
@@ -596,11 +828,12 @@ func (h *DashboardHandler) CreateInstallToken(c *gin.Context) {
 	scriptURL := fmt.Sprintf("%s/api/v1/install/script?os=%s&token=%s", publicBaseURL(c), targetOS, token)
 	command := installCommandForOS(targetOS, scriptURL)
 	c.JSON(http.StatusCreated, gin.H{
-		"token":      token,
-		"url":        scriptURL,
-		"command":    command,
-		"expires_at": expiresAt.Format(time.RFC3339),
-		"expires_in": int(installTokenTTL.Seconds()),
+		"token":                token,
+		"url":                  scriptURL,
+		"command":              command,
+		"emergency_secret_key": secretKey,
+		"expires_at":           expiresAt.Format(time.RFC3339),
+		"expires_in":           int(installTokenTTL.Seconds()),
 	})
 }
 
@@ -613,7 +846,9 @@ func (h *DashboardHandler) GetInstallScript(c *gin.Context) {
 		return
 	}
 
-	if err := h.consumeInstallToken(c, targetOS); err != nil {
+	agentToken := strings.TrimSpace(c.Query("token"))
+	recoveryHash, err := h.consumeInstallToken(c, targetOS)
+	if err != nil {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": err.Error()})
 		return
 	}
@@ -621,10 +856,10 @@ func (h *DashboardHandler) GetInstallScript(c *gin.Context) {
 	switch targetOS {
 	case "linux":
 		c.Header("Content-Type", "text/x-shellscript; charset=utf-8")
-		c.String(http.StatusOK, buildLinuxInstallScript(c))
+		c.String(http.StatusOK, buildLinuxInstallScript(c, h.installNetworkSettings(c), agentToken, recoveryHash))
 	case "windows":
 		c.Header("Content-Type", "text/plain; charset=utf-8")
-		c.String(http.StatusOK, buildWindowsInstallScript(c))
+		c.String(http.StatusOK, buildWindowsInstallScript(c, h.installNetworkSettings(c), agentToken, recoveryHash))
 	default:
 		c.JSON(http.StatusBadRequest, gin.H{
 			"error":     "unsupported os",
@@ -633,13 +868,25 @@ func (h *DashboardHandler) GetInstallScript(c *gin.Context) {
 	}
 }
 
-func (h *DashboardHandler) consumeInstallToken(c *gin.Context, targetOS string) error {
+func (h *DashboardHandler) consumeInstallToken(c *gin.Context, targetOS string) (string, error) {
 	token := strings.TrimSpace(c.Query("token"))
 	if token == "" {
-		return errors.New("install token is required")
+		return "", errors.New("install token is required")
 	}
 
-	res, err := h.database.Exec(`
+	var recoveryHash sql.NullString
+	err := h.database.QueryRow(`
+		SELECT recovery_hash FROM install_tokens
+		WHERE token_hash = ?
+		  AND target_os = ?
+		  AND used_at IS NULL
+		  AND expires_at > NOW()
+	`, installTokenHash(token), targetOS).Scan(&recoveryHash)
+	if err != nil {
+		return "", errors.New("install token is invalid, expired, already used, or not valid for this OS")
+	}
+
+	_, err = h.database.Exec(`
 		UPDATE install_tokens
 		SET used_at = NOW()
 		WHERE token_hash = ?
@@ -648,17 +895,10 @@ func (h *DashboardHandler) consumeInstallToken(c *gin.Context, targetOS string) 
 		  AND expires_at > NOW()
 	`, installTokenHash(token), targetOS)
 	if err != nil {
-		return fmt.Errorf("failed to validate install token")
+		return "", fmt.Errorf("failed to validate install token")
 	}
 
-	affected, err := res.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("failed to validate install token")
-	}
-	if affected != 1 {
-		return errors.New("install token is invalid, expired, already used, or not valid for this OS")
-	}
-	return nil
+	return recoveryHash.String, nil
 }
 
 func newInstallToken() (string, error) {
@@ -679,44 +919,122 @@ func installCommandForOS(targetOS, scriptURL string) string {
 	case "windows":
 		return fmt.Sprintf(`powershell -NoProfile -ExecutionPolicy Bypass -Command "[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; iex (Invoke-WebRequest -UseBasicParsing -Uri '%s').Content"`, scriptURL)
 	default:
-		return fmt.Sprintf("curl -fsSL %s | sudo bash", scriptURL)
+		return fmt.Sprintf("curl -fsSL '%s' | bash", scriptURL)
 	}
 }
 
 func buildInstallInstructions(c *gin.Context) string {
 	baseURL := publicBaseURL(c)
-	return fmt.Sprintf(`ProxyManager quick install
+	return fmt.Sprintf(`ProxyManager One-Time Agent Install Scripts
+===========================================
 
-Linux:
-Generate a one-time install URL from the dashboard. The token expires after 5 minutes and is consumed when the script is downloaded.
+To generate a one-time install command, request an install token from the dashboard API:
+  POST %s/api/v1/install/token
+  Headers:
+    Authorization: Bearer <dashboard-token>
+    Content-Type: application/json
+  Body:
+    {"os":"linux"}   or   {"os":"windows"}
 
-Windows (PowerShell):
-Generate a one-time install URL from the dashboard. The token expires after 5 minutes and is consumed when the script is downloaded.
+The API returns:
+  - a one-time script URL
+  - an emergency secret key (save this for remote fallback recovery)
+  - a pre-built copy-paste shell command
+  - a 5-minute expiry timestamp
 
-Notes:
-- Agent binaries are served from %s/downloads/
-- Expected files:
-  - agent-linux-amd64
-  - agent-linux-arm64
-  - agent-windows-amd64.exe
-  - agent-windows-arm64.exe
+Each token can only be downloaded once.
 `, baseURL)
 }
 
-func buildLinuxInstallScript(c *gin.Context) string {
+func bashQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+}
+
+func psQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", "''") + "'"
+}
+
+func buildLinuxInstallScript(c *gin.Context, network installNetworkSettings, agentToken string, recoveryHash string) string {
 	baseURL := publicBaseURL(c)
 	return fmt.Sprintf(`#!/usr/bin/env bash
 set -euo pipefail
 
-BASE_URL=%q
+BASE_URL=%s
 WORKDIR="/opt/proxymanager"
 SERVICE_NAME="proxymanager-agent"
-SERVER_ADDR=%q
-AGENT_AUTH_TOKEN=%q
+SERVER_ADDR=%s
+AGENT_AUTH_TOKEN=%s
+PREFER_TAILSCALE=%s
+CONTROL_PLANE_TAILSCALE_IP=%s
+HEADSCALE_SERVER_URL=%s
+HEADSCALE_AUTH_KEY=%s
+GRPC_PORT=%s
+RECOVERY_HASH=%s
 
 if [ "$(id -u)" -ne 0 ]; then
   echo "Please run as root"
   exit 1
+fi
+
+command_exists() {
+  command -v "$1" >/dev/null 2>&1
+}
+
+ping_control_plane() {
+  [ -n "$CONTROL_PLANE_TAILSCALE_IP" ] || return 1
+  ping -c 1 -W 2 "$CONTROL_PLANE_TAILSCALE_IP" >/dev/null 2>&1
+}
+
+install_tailscale() {
+  if ! command_exists tailscale || ! command_exists tailscaled; then
+    echo "Installing Tailscale client..."
+    curl -fsSL https://tailscale.com/install.sh | sh
+  fi
+
+  systemctl enable --now tailscaled
+}
+
+connect_headscale() {
+  if [ -z "$HEADSCALE_SERVER_URL" ] || [ -z "$HEADSCALE_AUTH_KEY" ]; then
+    echo "Warning: Headscale settings incomplete."
+    return 1
+  fi
+
+  install_tailscale || return 1
+
+  if tailscale status >/dev/null 2>&1 && ping_control_plane; then
+    echo "Tailscale is already connected to the control plane."
+    return 0
+  fi
+
+  echo "Connecting this agent to Headscale at $HEADSCALE_SERVER_URL..."
+  tailscale up \
+    --login-server "$HEADSCALE_SERVER_URL" \
+    --authkey "$HEADSCALE_AUTH_KEY" \
+    --accept-dns=false \
+    --reset || true
+
+  for i in $(seq 1 10); do
+    if ping_control_plane; then
+      echo "Control plane is reachable over Tailscale: $CONTROL_PLANE_TAILSCALE_IP"
+      return 0
+    fi
+    sleep 2
+  done
+
+  echo "Warning: Tailscale connected but $CONTROL_PLANE_TAILSCALE_IP is unreachable."
+  return 1
+}
+
+if [ "$PREFER_TAILSCALE" = "true" ] && [ -n "$CONTROL_PLANE_TAILSCALE_IP" ]; then
+  if ping_control_plane; then
+    echo "Control plane is reachable over Tailscale: $CONTROL_PLANE_TAILSCALE_IP"
+    SERVER_ADDR="${CONTROL_PLANE_TAILSCALE_IP}:${GRPC_PORT}"
+  elif connect_headscale; then
+    SERVER_ADDR="${CONTROL_PLANE_TAILSCALE_IP}:${GRPC_PORT}"
+  else
+    echo "Notice: Falling back to direct server address: $SERVER_ADDR"
+  fi
 fi
 
 ARCH="$(uname -m)"
@@ -761,9 +1079,15 @@ chmod +x frpc
 rm -rf frp.tar.gz frp_${FRP_VER}_linux_amd64
 
 cat > "$WORKDIR/agent.env" <<EOF
-SERVER_ADDR=%s
-AGENT_AUTH_TOKEN=%s
+SERVER_ADDR=${SERVER_ADDR}
+AGENT_AUTH_TOKEN=${AGENT_AUTH_TOKEN}
 EOF
+
+if [ -n "$RECOVERY_HASH" ]; then
+  echo "Setting up Emergency Recovery Hash..."
+  printf '%%s\n' "$RECOVERY_HASH" > "$WORKDIR/recovery.hash"
+  chmod 600 "$WORKDIR/recovery.hash"
+fi
 
 cat > /etc/systemd/system/${SERVICE_NAME}.service <<EOF
 [Unit]
@@ -788,18 +1112,124 @@ systemctl enable --now "$SERVICE_NAME"
 
 echo "ProxyManager agent installed successfully."
 systemctl --no-pager --full status "$SERVICE_NAME" || true
-`, baseURL, grpcServerAddr(c), os.Getenv("AGENT_AUTH_TOKEN"), grpcServerAddr(c), os.Getenv("AGENT_AUTH_TOKEN"))
+`, bashQuote(baseURL), bashQuote(grpcServerAddr(c)), bashQuote(agentToken), bashQuote(strconv.FormatBool(network.PreferTailscale)), bashQuote(network.ControlPlaneTailscaleIP), bashQuote(network.HeadscaleServerURL), bashQuote(network.HeadscaleAuthKey), bashQuote(grpcPort()), bashQuote(recoveryHash))
 }
 
-func buildWindowsInstallScript(c *gin.Context) string {
+func buildWindowsInstallScript(c *gin.Context, network installNetworkSettings, agentToken string, recoveryHash string) string {
 	baseURL := publicBaseURL(c)
 	return fmt.Sprintf(`$ErrorActionPreference = "Stop"
 
-$BaseUrl = %q
+$BaseUrl = %s
 $WorkDir = "C:\ProxyManager"
 $ServiceName = "ProxyManagerAgent"
-$ServerAddr = %q
-$AgentToken = %q
+$ServerAddr = %s
+$AgentToken = %s
+$PreferTailscale = $%t
+$ControlPlaneTailscaleIp = %s
+$HeadscaleServerUrl = %s
+$HeadscaleAuthKey = %s
+$RecoveryHash = %s
+
+function Test-ControlPlaneTailscale {
+  if ([string]::IsNullOrWhiteSpace($ControlPlaneTailscaleIp)) {
+    return $false
+  }
+  return Test-Connection -ComputerName $ControlPlaneTailscaleIp -Count 1 -Quiet -ErrorAction SilentlyContinue
+}
+
+function Install-Tailscale {
+  Write-Host "Tailscale is not installed. Downloading Tailscale installer..."
+  $msiPath = "$env:TEMP\tailscale-setup.msi"
+  $msiUrl = "https://pkgs.tailscale.com/stable/tailscale-ipn-setup-latest.msi"
+  
+  Invoke-WebRequest -Uri $msiUrl -OutFile $msiPath -UseBasicParsing
+  
+  Write-Host "Installing Tailscale silently (this might take a minute)..."
+  $proc = Start-Process msiexec.exe -ArgumentList ('/i "' + $msiPath + '" /qn /norestart') -Wait -PassThru
+  if ($proc.ExitCode -ne 0) {
+    throw "Tailscale installation failed with exit code $($proc.ExitCode)"
+  }
+  
+  # Remove temp installer
+  Remove-Item -Path $msiPath -Force -ErrorAction SilentlyContinue
+  
+  # Wait for tailscaled service to start and CLI to become available
+  Start-Sleep -Seconds 10
+}
+
+function Connect-Headscale {
+  if ([string]::IsNullOrWhiteSpace($HeadscaleServerUrl) -or [string]::IsNullOrWhiteSpace($HeadscaleAuthKey)) {
+    Write-Warning "Headscale settings are incomplete."
+    return $false
+  }
+
+  $tailscaleCmd = Get-Command tailscale.exe -ErrorAction SilentlyContinue
+  if (-not $tailscaleCmd) {
+    try {
+      Install-Tailscale
+    } catch {
+      Write-Warning "Failed to install Tailscale: $_"
+      return $false
+    }
+  }
+
+  $tailscaleExe = "C:\Program Files\Tailscale\tailscale.exe"
+  if (-not (Test-Path $tailscaleExe)) {
+    $cmd = Get-Command tailscale.exe -ErrorAction SilentlyContinue
+    if ($cmd) { $tailscaleExe = $cmd.Source }
+    else { 
+      Write-Warning "Tailscale executable not found"
+      return $false 
+    }
+  }
+
+  Write-Host "Connecting this agent to Headscale at $HeadscaleServerUrl..."
+  $prevEAP = $ErrorActionPreference
+  $ErrorActionPreference = "Continue"
+  try {
+    $out = & $tailscaleExe up --login-server $HeadscaleServerUrl --authkey $HeadscaleAuthKey --accept-dns=$false --reset --unattended 2>&1 | Out-String
+    if ($out -match "401 Unauthorized" -or $out -match "already in use") {
+      Write-Host "Notice: Local Tailscale daemon is owned by another Windows user session."
+      try {
+        & $tailscaleExe set --operator=$env:USERNAME 2>$null | Out-Null
+        $out = & $tailscaleExe up --login-server $HeadscaleServerUrl --authkey $HeadscaleAuthKey --accept-dns=$false --reset --unattended 2>&1 | Out-String
+      } catch {}
+    }
+    Write-Host $out
+  } catch {
+    Write-Warning "Tailscale execution error: $_"
+  } finally {
+    $ErrorActionPreference = $prevEAP
+  }
+
+  # Verify connection by pinging control plane IP
+  for ($i = 1; $i -le 10; $i++) {
+    if (Test-ControlPlaneTailscale) {
+      Write-Host "Control plane is reachable over Tailscale: $ControlPlaneTailscaleIp"
+      return $true
+    }
+    Start-Sleep -Seconds 2
+  }
+
+  Write-Warning "Tailscale was configured, but $ControlPlaneTailscaleIp is not reachable."
+  return $false
+}
+
+if ($PreferTailscale) {
+  $connected = $false
+  if (Test-ControlPlaneTailscale) {
+    Write-Host "Control plane is already reachable over Tailscale: $ControlPlaneTailscaleIp"
+    $connected = $true
+  } else {
+    $connected = Connect-Headscale
+  }
+  if ($connected) {
+    $ServerAddr = "${ControlPlaneTailscaleIp}:%s"
+    Write-Host "Tailscale endpoint connected. Server address set to: $ServerAddr"
+  } else {
+    Write-Warning "Could not establish Tailscale link. Falling back to direct public endpoint: $ServerAddr"
+  }
+}
 
 # Force kill only processes running from our WorkDir to avoid touching unrelated frpc.exe instances
 Get-Process agent, frpc -ErrorAction SilentlyContinue | Where-Object { 
@@ -848,19 +1278,270 @@ Invoke-WebRequest -Uri "$BaseUrl/downloads/$AgentFile" -OutFile "$WorkDir\agent.
 Write-Host "Downloading frpc binary (v0.68.0)..."
 Invoke-WebRequest -Uri "$BaseUrl/downloads/$FrpFile" -OutFile "$WorkDir\frpc.exe" -UseBasicParsing
 
+Write-Host "Saving agent configuration..."
 [Environment]::SetEnvironmentVariable("SERVER_ADDR", $ServerAddr, "Machine")
 [Environment]::SetEnvironmentVariable("AGENT_AUTH_TOKEN", $AgentToken, "Machine")
+$envLines = @("SERVER_ADDR=" + $ServerAddr, "AGENT_AUTH_TOKEN=" + $AgentToken)
+Set-Content -Path (Join-Path $WorkDir "agent.env") -Value $envLines -Force
 
-if (-not (Get-Service -Name $ServiceName -ErrorAction SilentlyContinue)) {
-    $binPath = "$WorkDir\agent.exe"
-    New-Service -Name $ServiceName -BinaryPathName $binPath -DisplayName "ProxyManager Agent" -StartupType Automatic | Out-Null
+if (-not [string]::IsNullOrWhiteSpace($RecoveryHash)) {
+  Write-Host "Configuring Emergency Recovery Hash..."
+  Set-Content -Path (Join-Path $WorkDir "recovery.hash") -Value $RecoveryHash -Force
+  try {
+    icacls (Join-Path $WorkDir "recovery.hash") /inheritance:r /grant:r "SYSTEM:F" "Administrators:F" | Out-Null
+  } catch {}
 }
 
+Write-Host "Configuring Windows Service for Auto-Start at Boot..."
+if (Get-Service -Name $ServiceName -ErrorAction SilentlyContinue) {
+    Write-Host "Stopping and removing existing $ServiceName service..."
+    Stop-Service -Name $ServiceName -Force -ErrorAction SilentlyContinue
+    sc.exe delete $ServiceName | Out-Null
+    Start-Sleep -Seconds 2
+}
+
+$agentExe = Join-Path $WorkDir "agent.exe"
+$binPath = ('"{0}" -server "{1}" -token "{2}"' -f $agentExe, $ServerAddr, $AgentToken)
+New-Service -Name $ServiceName -BinaryPathName $binPath -DisplayName "ProxyManager Client Agent" -StartupType Automatic -Description "ProxyManager Client Agent - Tu dong khoi dong cung he thong va giam sat may chu." | Out-Null
+
+# Configure automatic startup at boot (before login), network dependencies, and recovery actions
+sc.exe config $ServiceName start= auto depend= Tcpip/Dnscache | Out-Null
+sc.exe failure $ServiceName reset= 86400 actions= restart/5000/restart/10000/restart/15000 | Out-Null
+sc.exe failureflag $ServiceName 1 | Out-Null
+
+Write-Host "Starting ProxyManager Agent service..."
 Start-Service -Name $ServiceName
 
-Write-Host "ProxyManager agent installed successfully."
+Write-Host "ProxyManager agent installed and configured to auto-start with Windows at boot (no login required)."
 Get-Service -Name $ServiceName
-`, baseURL, grpcServerAddr(c), os.Getenv("AGENT_AUTH_TOKEN"))
+`, psQuote(baseURL), psQuote(grpcServerAddr(c)), psQuote(agentToken), network.PreferTailscale, psQuote(network.ControlPlaneTailscaleIP), psQuote(network.HeadscaleServerURL), psQuote(network.HeadscaleAuthKey), psQuote(recoveryHash), grpcPort())
+}
+
+// --- Emergency Fallback Handlers ---
+
+func (h *DashboardHandler) EmergencyResetPassword(c *gin.Context) {
+	agentID := c.Param("id")
+	var req struct {
+		SecretKey   string `json:"secret_key" binding:"required"`
+		AccountName string `json:"account_name"`
+		NewPassword string `json:"new_password" binding:"required"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Vui lòng nhập đầy đủ Secret Key và Mật khẩu mới"})
+		return
+	}
+
+	var agentOS string
+	_ = h.database.QueryRow("SELECT os FROM agents WHERE id = ?", agentID).Scan(&agentOS)
+	isLinux := strings.Contains(strings.ToLower(agentOS), "linux") || strings.Contains(strings.ToLower(agentOS), "ubuntu") || strings.Contains(strings.ToLower(agentOS), "debian") || strings.Contains(strings.ToLower(agentOS), "centos")
+
+	accountName := strings.TrimSpace(req.AccountName)
+	if accountName == "" {
+		if isLinux {
+			accountName = "root"
+		} else {
+			accountName = "Administrator"
+		}
+	}
+
+	if strings.ContainsAny(accountName, "\"';$`|&><\r\n\t /\\") {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Tên tài khoản chứa ký tự không hợp lệ"})
+		return
+	}
+
+	var execScript string
+	if isLinux {
+		// Linux root/user chpasswd
+		escapedPass := strings.ReplaceAll(req.NewPassword, "'", "'\\''")
+		execScript = fmt.Sprintf(`
+TARGET_USER='%s'
+PASS='%s'
+echo "$TARGET_USER:$PASS" | chpasswd
+if [ $? -eq 0 ]; then
+    echo "[SUCCESS] Mat khau cho tai khoan $TARGET_USER da duoc dat lai thanh cong tren Linux."
+else
+    echo -e "$PASS\n$PASS" | passwd "$TARGET_USER"
+    if [ $? -eq 0 ]; then
+        echo "[SUCCESS] Dat lai mat khau thanh cong qua passwd."
+    else
+        echo "[ERROR] Khong the dat lai mat khau cho $TARGET_USER."
+    fi
+fi
+`, accountName, escapedPass)
+	} else {
+		// Windows ADSI / net user
+		escapedPassword := strings.ReplaceAll(req.NewPassword, "'", "''")
+		execScript = fmt.Sprintf(`
+$acc = '%s';
+$pass = '%s';
+try {
+    $user = [ADSI]("WinNT://" + $env:COMPUTERNAME + "/" + $acc + ",user");
+    $user.SetPassword($pass);
+    $user.SetInfo();
+    net user $acc /active:yes;
+    Write-Host "[SUCCESS] Mat khau cho tai khoan $acc da duoc dat lai thanh cong va tai khoan da duoc kich hoat.";
+} catch {
+    Write-Host "[FALLBACK] Thu dung net user...";
+    net user $acc $pass /active:yes;
+    if ($LASTEXITCODE -eq 0) {
+        Write-Host "[SUCCESS] Dat lai mat khau thanh cong qua net user.";
+    } else {
+        Write-Error "Khong the dat lai mat khau: $_";
+    }
+}
+`, accountName, escapedPassword)
+	}
+
+	payloadBytes, _ := json.Marshal(map[string]string{
+		"secret_key": req.SecretKey,
+		"script":     execScript,
+		"action":     "reset_password",
+	})
+
+	if err := h.apiHandler.SendCommand(agentID, "EMERGENCY_EXEC", string(payloadBytes)); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Không thể gửi lệnh cứu hộ tới máy chủ (%v)", err)})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"message": "Lệnh đặt lại mật khẩu đã được gửi tới Agent."})
+}
+
+func (h *DashboardHandler) EmergencyInjectSSHKey(c *gin.Context) {
+	agentID := c.Param("id")
+	var req struct {
+		SecretKey    string `json:"secret_key" binding:"required"`
+		AccountName  string `json:"account_name"`
+		SSHPublicKey string `json:"ssh_public_key" binding:"required"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Vui lòng nhập đầy đủ Secret Key và SSH Public Key"})
+		return
+	}
+
+	accountName := strings.TrimSpace(req.AccountName)
+	if accountName == "" {
+		accountName = "root"
+	}
+
+	if strings.ContainsAny(accountName, "\"';$`|&><\r\n\t /\\") {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Tên tài khoản chứa ký tự không hợp lệ"})
+		return
+	}
+
+	sshKey := strings.TrimSpace(req.SSHPublicKey)
+	if !strings.HasPrefix(sshKey, "ssh-") && !strings.HasPrefix(sshKey, "ecdsa-") && !strings.HasPrefix(sshKey, "sk-") {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "SSH Public Key không đúng định dạng (phải bắt đầu bằng ssh-rsa, ssh-ed25519, ecdsa-..., v.v.)"})
+		return
+	}
+
+	sshKey = strings.ReplaceAll(sshKey, "\n", "")
+	sshKey = strings.ReplaceAll(sshKey, "\r", "")
+
+	bashScript := fmt.Sprintf(`
+TARGET_USER='%s'
+SSH_KEY='%s'
+
+if [ "$TARGET_USER" = "root" ]; then
+    USER_HOME="/root"
+else
+    USER_HOME=$(getent passwd "$TARGET_USER" | cut -d: -f6)
+    if [ -z "$USER_HOME" ] || [ ! -d "$USER_HOME" ]; then
+        USER_HOME="/home/$TARGET_USER"
+    fi
+fi
+
+SSH_DIR="$USER_HOME/.ssh"
+AUTH_KEYS="$SSH_DIR/authorized_keys"
+
+mkdir -p "$SSH_DIR"
+chmod 700 "$SSH_DIR"
+
+if ! grep -qF "$SSH_KEY" "$AUTH_KEYS" 2>/dev/null; then
+    echo "$SSH_KEY" >> "$AUTH_KEYS"
+    echo "[SUCCESS] Da them SSH Public Key vao $AUTH_KEYS"
+else
+    echo "[INFO] SSH Public Key da ton tai san trong $AUTH_KEYS"
+fi
+
+chmod 600 "$AUTH_KEYS"
+
+if [ "$TARGET_USER" != "root" ] && id "$TARGET_USER" >/dev/null 2>&1; then
+    chown -R "$TARGET_USER:$TARGET_USER" "$SSH_DIR"
+fi
+
+if command -v systemctl >/dev/null 2>&1; then
+    systemctl enable --now ssh 2>/dev/null || systemctl enable --now sshd 2>/dev/null || true
+fi
+
+echo "[SUCCESS] Cau hinh SSH Key hoan tat! Ban co the dang nhap SSH vao may: ssh $TARGET_USER@<IP>"
+`, accountName, sshKey)
+
+	payloadBytes, _ := json.Marshal(map[string]string{
+		"secret_key": req.SecretKey,
+		"script":     bashScript,
+		"action":     "inject_ssh_key",
+	})
+
+	if err := h.apiHandler.SendCommand(agentID, "EMERGENCY_EXEC", string(payloadBytes)); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Không thể gửi lệnh cứu hộ tới máy chủ (%v)", err)})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"message": "Lệnh chèn SSH Key đã được gửi tới Agent. Đang thực thi..."})
+}
+
+func (h *DashboardHandler) EmergencyExec(c *gin.Context) {
+	agentID := c.Param("id")
+	var req struct {
+		SecretKey string `json:"secret_key" binding:"required"`
+		Script    string `json:"script" binding:"required"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Vui lòng cung cấp Secret Key và Lệnh PowerShell"})
+		return
+	}
+
+	payloadBytes, _ := json.Marshal(map[string]string{
+		"secret_key": req.SecretKey,
+		"script":     req.Script,
+		"action":     "powershell",
+	})
+
+	if err := h.apiHandler.SendCommand(agentID, "EMERGENCY_EXEC", string(payloadBytes)); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Không thể gửi lệnh cứu hộ tới máy chủ (%v)", err)})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"message": "Lệnh khẩn cấp đã được gửi tới Agent."})
+}
+
+func (h *DashboardHandler) EmergencyRotateKey(c *gin.Context) {
+	agentID := c.Param("id")
+	var req struct {
+		OldSecretKey string `json:"old_secret_key" binding:"required"`
+		NewSecretKey string `json:"new_secret_key" binding:"required"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Vui lòng cung cấp Secret Key cũ và Secret Key mới"})
+		return
+	}
+
+	if len(req.NewSecretKey) < 8 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Secret Key mới phải có ít nhất 8 ký tự"})
+		return
+	}
+
+	payloadBytes, _ := json.Marshal(map[string]string{
+		"old_secret_key": req.OldSecretKey,
+		"new_secret_key": req.NewSecretKey,
+	})
+
+	if err := h.apiHandler.SendCommand(agentID, "ROTATE_SECRET_KEY", string(payloadBytes)); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Không thể gửi yêu cầu đổi key tới máy chủ (%v)", err)})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"message": "Yêu cầu đổi Secret Key đã được gửi tới Agent."})
 }
 
 func publicBaseURL(c *gin.Context) string {
@@ -898,21 +1579,31 @@ func publicBaseURL(c *gin.Context) string {
 }
 
 func grpcServerAddr(c *gin.Context) string {
+	// The agent should connect to the same host that was used to access this install script.
+	// This correctly handles dynamic DNS, public IPs, and local network names.
 	host := c.Request.Host
-	if host != "" {
-		// Remove port if exists in host header
-		if h, _, err := net.SplitHostPort(host); err == nil {
-			host = h
-		}
-	} else {
-		host = os.Getenv("SERVER_IP")
+
+	// c.Request.Host can include a port, which we need to strip.
+	if h, _, err := net.SplitHostPort(c.Request.Host); err == nil {
+		host = h // Successfully split, so host is now just the hostname/IP
 	}
 
+	// Fallback to SERVER_IP env var if host is a local address, to prevent agent connecting to localhost.
+	if host == "localhost" || host == "127.0.0.1" {
+		if serverIP := os.Getenv("SERVER_IP"); serverIP != "" {
+			host = serverIP
+		}
+	}
+
+	return fmt.Sprintf("%s:%s", host, grpcPort())
+}
+
+func grpcPort() string {
 	grpcPort := os.Getenv("GRPC_PORT")
 	if grpcPort == "" {
 		grpcPort = "50051"
 	}
-	return fmt.Sprintf("%s:%s", host, grpcPort)
+	return grpcPort
 }
 
 // --- Domain, Nginx & Certificate Handlers ---
@@ -1164,7 +1855,12 @@ func runCertbot(ctx context.Context, domain string) error {
 		return err
 	}
 	email := strings.TrimSpace(os.Getenv("CERTBOT_EMAIL"))
+	account := getCertbotAccount()
+
 	args := []string{"certonly", "--webroot", "-w", "/var/www/html", "-d", domain, "--agree-tos", "--non-interactive"}
+	if account != "" {
+		args = append(args, "--account", account)
+	}
 	if email != "" {
 		args = append(args, "-m", email)
 	} else {
@@ -1172,6 +1868,35 @@ func runCertbot(ctx context.Context, domain string) error {
 	}
 	return runCommand(ctx, "certbot", args...)
 }
+
+func getCertbotAccount() string {
+	if acc := strings.TrimSpace(os.Getenv("CERTBOT_ACCOUNT")); acc != "" {
+		return acc
+	}
+	baseDir := "/etc/letsencrypt/accounts/acme-v02.api.letsencrypt.org/directory"
+	entries, err := filepath.Glob(filepath.Join(baseDir, "*"))
+	if err != nil || len(entries) == 0 {
+		entries, err = filepath.Glob("/etc/letsencrypt/accounts/*/*/*")
+		if err != nil || len(entries) == 0 {
+			return ""
+		}
+	}
+
+	var latestAcc string
+	var latestTime time.Time
+	for _, entry := range entries {
+		info, err := os.Stat(entry)
+		if err == nil && info.IsDir() {
+			accName := filepath.Base(entry)
+			if latestAcc == "" || info.ModTime().After(latestTime) {
+				latestAcc = accName
+				latestTime = info.ModTime()
+			}
+		}
+	}
+	return latestAcc
+}
+
 
 func runCommand(ctx context.Context, name string, args ...string) error {
 	cmd := exec.CommandContext(ctx, name, args...)

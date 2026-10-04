@@ -52,6 +52,9 @@ message HardwareStats {
   uint64 disk_free = 4;
   uint64 net_in = 5;
   uint64 net_out = 6;
+  double cpu_temp = 7;
+  uint64 disk_total = 8;
+  uint64 disk_used = 9;
 }
 
 message ServiceInfo {

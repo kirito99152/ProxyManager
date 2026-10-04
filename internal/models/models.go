@@ -53,3 +53,33 @@ type HardwareLog struct {
 	CreatedAt time.Time `db:"created_at" json:"created_at"`
 }
 
+// User represents a dashboard user or member.
+type User struct {
+	ID                    int        `db:"id" json:"id"`
+	Username              string     `db:"username" json:"username"`
+	Email                 *string    `db:"email" json:"email"`
+	PasswordHash          string     `db:"password_hash" json:"-"`
+	Role                  string     `db:"role" json:"role"`
+	IsVerified            bool       `db:"is_verified" json:"is_verified"`
+	VerificationCode      *string    `db:"verification_code" json:"-"`
+	VerificationExpiresAt *time.Time `db:"verification_expires_at" json:"-"`
+	CreatedAt             time.Time  `db:"created_at" json:"created_at"`
+}
+
+// AgentManager maps an agent to a user who manages it and receives email alerts.
+type AgentManager struct {
+	ID        int       `db:"id" json:"id"`
+	AgentID   string    `db:"agent_id" json:"agent_id"`
+	UserID    int       `db:"user_id" json:"user_id"`
+	CreatedAt time.Time `db:"created_at" json:"created_at"`
+}
+
+// ManagerInfo represents public manager info attached to an agent.
+type ManagerInfo struct {
+	UserID     int     `db:"user_id" json:"user_id"`
+	Username   string  `db:"username" json:"username"`
+	Email      *string `db:"email" json:"email"`
+	IsVerified bool    `db:"is_verified" json:"is_verified"`
+}
+
+

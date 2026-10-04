@@ -2,7 +2,12 @@
 package main
 
 import (
+	"context"
+	"io"
 	"log"
+	"os"
+	"path/filepath"
+	"time"
 
 	"golang.org/x/sys/windows/svc"
 	"google.golang.org/grpc"
@@ -28,29 +33,59 @@ func (m *agentService) Execute(args []string, r <-chan svc.ChangeRequest, change
 	const cmdsAccepted = svc.AcceptStop | svc.AcceptShutdown
 	changes <- svc.Status{State: svc.StartPending}
 
-	conn, err := grpc.NewClient(m.serverAddr, grpc.WithTransportCredentials(insecure.NewCredentials()))
-	if err != nil {
-		log.Printf("did not connect: %v", err)
-		return false, 1
+	// Ensure working directory is the executable's directory
+	if execPath, err := os.Executable(); err == nil {
+		_ = os.Chdir(filepath.Dir(execPath))
 	}
-	defer conn.Close()
 
-	client := pb.NewAgentServiceClient(conn)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
 	agent := &Agent{
-		ServerAddr: m.serverAddr,
-		Token:      m.token,
-		Client:     client,
+		ServerAddr:      m.serverAddr,
+		Token:           m.token,
+		reportedMissing: make(map[string]bool),
 	}
 
-	if err := agent.Register(); err != nil {
-		log.Printf("failed to register: %v", err)
-		return false, 2
-	}
-
-	go agent.StartHeartbeat()
-	go agent.StartCommandStream()
-
+	// Immediately report Running so Windows SCM knows the service is active at boot
 	changes <- svc.Status{State: svc.Running, Accepts: cmdsAccepted}
+	log.Printf("[WindowsService] Service started, entering background connection loop for %s...", m.serverAddr)
+
+	// Run connection and registration in a robust retry loop in background
+	go func() {
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			default:
+			}
+
+			conn, err := grpc.NewClient(m.serverAddr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+			if err != nil {
+				log.Printf("[WindowsService] gRPC client creation failed (%v). Retrying in 5s...", err)
+				time.Sleep(5 * time.Second)
+				continue
+			}
+
+			agent.Client = pb.NewAgentServiceClient(conn)
+
+			redirector := &LogRedirector{agent: agent}
+			log.SetOutput(io.MultiWriter(os.Stdout, redirector))
+
+			log.Printf("[WindowsService] Attempting to register agent with %s...", m.serverAddr)
+			if err := agent.Register(); err != nil {
+				log.Printf("[WindowsService] Registration failed (%v). Retrying in 5 seconds...", err)
+				conn.Close()
+				time.Sleep(5 * time.Second)
+				continue
+			}
+
+			log.Printf("[WindowsService] Agent registered successfully as %s. Starting background routines...", agent.ID)
+			go agent.StartHeartbeat()
+			go agent.StartCommandStream()
+			break
+		}
+	}()
 
 	for {
 		select {
@@ -60,11 +95,12 @@ func (m *agentService) Execute(args []string, r <-chan svc.ChangeRequest, change
 				changes <- c.CurrentStatus
 			case svc.Stop, svc.Shutdown:
 				changes <- svc.Status{State: svc.StopPending}
+				cancel()
 				agent.Stop()
-				log.Println("Agent service stopping...")
+				log.Println("[WindowsService] Agent service stopping...")
 				return
 			default:
-				log.Printf("Unexpected control request: %d", c.Cmd)
+				log.Printf("[WindowsService] Unexpected control request: %d", c.Cmd)
 			}
 		}
 	}

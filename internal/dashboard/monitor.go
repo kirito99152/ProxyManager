@@ -1,25 +1,32 @@
 package dashboard
 
 import (
-	"github.com/kirito99152/ProxyManager/internal/hub"
+	"fmt"
 	"log"
 	"time"
 
 	"github.com/kirito99152/ProxyManager/internal/db"
+	"github.com/kirito99152/ProxyManager/internal/hub"
+	"github.com/kirito99152/ProxyManager/internal/mailer"
 	"github.com/kirito99152/ProxyManager/internal/models"
 )
 
 // StartAgentMonitor periodically checks for agents that haven't sent a heartbeat
-// and marks them as offline, broadcasting the change to the dashboard.
-func StartAgentMonitor(database *db.DB) {
+// and marks them as offline, broadcasting the change to the dashboard and sending alert emails.
+func StartAgentMonitor(database *db.DB, alertManager *mailer.AlertManager) {
 	ticker := time.NewTicker(10 * time.Second)
 	defer ticker.Stop()
 
 	log.Println("Started Agent Monitor (Offline Detection)")
 
 	for range ticker.C {
-		// Find agents online but whose last heartbeat was > 30 seconds ago
-		query := "SELECT * FROM agents WHERE status = 'online' AND last_heartbeat < (NOW() - INTERVAL 30 SECOND)"
+		timeoutSec := 30
+		if alertManager != nil {
+			timeoutSec = alertManager.GetSettingInt("alert_offline_timeout_seconds", 30)
+		}
+
+		// Find agents online but whose last heartbeat was > timeoutSec ago
+		query := fmt.Sprintf("SELECT * FROM agents WHERE status = 'online' AND last_heartbeat < (NOW() - INTERVAL %d SECOND)", timeoutSec)
 		
 		var staleAgents []models.Agent
 		err := database.Select(&staleAgents, query)
@@ -38,6 +45,11 @@ func StartAgentMonitor(database *db.DB) {
 				continue
 			}
 
+			// Trigger offline alert email
+			if alertManager != nil {
+				alertManager.TriggerOfflineAlert(agent)
+			}
+
 			// Broadcast offline status to WebSocket
 			payload := map[string]interface{}{
 				"agent_id": agent.ID,
@@ -47,3 +59,4 @@ func StartAgentMonitor(database *db.DB) {
 		}
 	}
 }
+

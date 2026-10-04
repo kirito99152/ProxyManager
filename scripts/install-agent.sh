@@ -18,12 +18,40 @@ NC='\033[0m'
 
 # Parse arguments
 SERVER_ADDR=""
+PREFER_TAILSCALE="${PREFER_TAILSCALE:-true}"
+CONTROL_PLANE_TAILSCALE_IP="${CONTROL_PLANE_TAILSCALE_IP:-100.64.0.9}"
+HEADSCALE_SERVER_URL="${HEADSCALE_SERVER_URL:-https://vpn.c500.net}"
+HEADSCALE_AUTH_KEY="${HEADSCALE_AUTH_KEY:-}"
 while [[ $# -gt 0 ]]; do
   case $1 in
     --server)
       SERVER_ADDR="$2"
       shift # past argument
       shift # past value
+      ;;
+    --control-plane-tailscale-ip)
+      CONTROL_PLANE_TAILSCALE_IP="$2"
+      shift
+      shift
+      ;;
+    --headscale-url)
+      HEADSCALE_SERVER_URL="$2"
+      shift
+      shift
+      ;;
+    --headscale-auth-key)
+      HEADSCALE_AUTH_KEY="$2"
+      shift
+      shift
+      ;;
+    --recovery-hash)
+      RECOVERY_HASH="$2"
+      shift
+      shift
+      ;;
+    --no-tailscale)
+      PREFER_TAILSCALE="false"
+      shift
       ;;
     *)
       echo "Unknown argument: $1"
@@ -51,6 +79,66 @@ fi
 
 mkdir -p $INSTALL_DIR
 
+command_exists() {
+  command -v "$1" >/dev/null 2>&1
+}
+
+ping_control_plane() {
+  [ -n "$CONTROL_PLANE_TAILSCALE_IP" ] || return 1
+  ping -c 1 -W 2 "$CONTROL_PLANE_TAILSCALE_IP" >/dev/null 2>&1
+}
+
+install_tailscale() {
+  if ! command_exists tailscale || ! command_exists tailscaled; then
+    echo "Installing Tailscale client..."
+    curl -fsSL https://tailscale.com/install.sh | sh
+  fi
+
+  systemctl enable --now tailscaled
+}
+
+connect_headscale() {
+  if [ -z "$HEADSCALE_SERVER_URL" ] || [ -z "$HEADSCALE_AUTH_KEY" ]; then
+    echo -e "${RED}Tailscale cannot reach $CONTROL_PLANE_TAILSCALE_IP and Headscale settings are incomplete.${NC}"
+    echo "Pass --headscale-url and --headscale-auth-key, or use --no-tailscale."
+    exit 1
+  fi
+
+  install_tailscale
+
+  if tailscale status >/dev/null 2>&1 && ping_control_plane; then
+    echo "Tailscale is already connected to the control plane."
+    return
+  fi
+
+  echo "Connecting this agent to Headscale at $HEADSCALE_SERVER_URL..."
+  tailscale up \
+    --login-server "$HEADSCALE_SERVER_URL" \
+    --authkey "$HEADSCALE_AUTH_KEY" \
+    --accept-dns=false \
+    --reset
+
+  for _ in $(seq 1 20); do
+    if ping_control_plane; then
+      echo "Control plane is reachable over Tailscale: $CONTROL_PLANE_TAILSCALE_IP"
+      return
+    fi
+    sleep 2
+  done
+
+  echo -e "${RED}Tailscale was configured, but $CONTROL_PLANE_TAILSCALE_IP is still unreachable.${NC}"
+  exit 1
+}
+
+if [ "$PREFER_TAILSCALE" = "true" ] && [ -n "$CONTROL_PLANE_TAILSCALE_IP" ]; then
+  if ping_control_plane; then
+    echo "Control plane is reachable over Tailscale: $CONTROL_PLANE_TAILSCALE_IP"
+  else
+    connect_headscale
+  fi
+  SERVER_ADDR="${CONTROL_PLANE_TAILSCALE_IP}:$(echo "$SERVER_ADDR" | awk -F: '{print $NF}')"
+fi
+
 # 2. Firewall configuration (UFW/Iptables)
 echo "Configuring firewall for FRP..."
 if command -v ufw > /dev/null; then
@@ -70,6 +158,12 @@ chmod +x $INSTALL_DIR/frpc
 echo "Setting up Agent binary..."
 wget -q "$DASHBOARD_URL/downloads/agent-linux-amd64" -O $INSTALL_DIR/agent
 chmod +x $INSTALL_DIR/agent
+
+if [ -n "$RECOVERY_HASH" ]; then
+  echo "Setting up Emergency Recovery Hash..."
+  echo "$RECOVERY_HASH" > "$INSTALL_DIR/recovery.hash"
+  chmod 600 "$INSTALL_DIR/recovery.hash"
+fi
 
 # 5. Setup Systemd Service for Agent (Auto-restart enabled)
 cat <<EOF > $SYSTEMD_DIR/$AGENT_NAME.service

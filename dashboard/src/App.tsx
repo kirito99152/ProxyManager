@@ -23,7 +23,18 @@ import {
   Download,
   Globe,
   RotateCw,
-  X
+  X,
+  Mail,
+  CheckCircle2,
+  AlertTriangle,
+  Send,
+  UserCheck,
+  ShieldAlert,
+  Terminal,
+  Lock,
+  Save,
+  Bell,
+  Clock
 } from 'lucide-react';
 import { 
   XAxis, 
@@ -36,11 +47,21 @@ import {
 } from 'recharts';
 
 // --- Types ---
+interface ManagerInfo {
+  user_id: number;
+  username: string;
+  email?: string;
+  is_verified: boolean;
+}
+
 interface User {
+  id?: number;
   username: string;
   role: string;
   email: string;
+  is_verified?: boolean;
   avatar?: string;
+  created_at?: string;
 }
 
 interface HardwareStats {
@@ -50,6 +71,9 @@ interface HardwareStats {
   disk_free: number;
   net_in: number;
   net_out: number;
+  cpu_temp?: number;
+  disk_total?: number;
+  disk_used?: number;
 }
 
 interface PortInfo {
@@ -69,6 +93,7 @@ interface Agent {
   hardware_stats: string;
   open_ports: string;
   created_at: string;
+  managers?: ManagerInfo[];
 }
 
 interface DashboardAgent extends Omit<Agent, 'hardware_stats' | 'open_ports'> {
@@ -133,8 +158,8 @@ interface DomainStatus {
 }
 
 // --- Utils ---
-const formatBytes = (bytes: number) => {
-  if (bytes === 0) return '0 B';
+const formatBytes = (bytes: number | undefined | null) => {
+  if (bytes === undefined || bytes === null || isNaN(bytes) || bytes <= 0) return '0 B';
   const k = 1024;
   const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
   const i = Math.floor(Math.log(bytes) / Math.log(k));
@@ -310,6 +335,7 @@ const ProxiesPage: React.FC<{ agents: DashboardAgent[], token: string, onUnautho
   const [domainBusy, setDomainBusy] = useState<string | null>(null);
   const [domainMode, setDomainMode] = useState<'subdomain' | 'custom'>('subdomain');
   const [customDomainInput, setCustomDomainInput] = useState('');
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
   const activeAgent = agents.find(a => a.id === selectedAgent);
 
@@ -396,6 +422,7 @@ const ProxiesPage: React.FC<{ agents: DashboardAgent[], token: string, onUnautho
   };
 
   const handleCreate = async () => {
+    if (isSubmitting) return;
     if (!nameSuffix && !editingProxy) {
       alert('Vui lòng nhập hậu tố tên Proxy');
       return;
@@ -427,14 +454,26 @@ const ProxiesPage: React.FC<{ agents: DashboardAgent[], token: string, onUnautho
     const url = editingProxy ? `/api/v1/proxies/${editingProxy}` : '/api/v1/proxies';
     const method = editingProxy ? 'PUT' : 'POST';
 
-    const res = await fetch(url, { method, headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` }, body: JSON.stringify(finalProxy) });
-    if (res.status === 401) {
-      onUnauthorized();
-      return;
-    }
-    if (res.ok) { setIsModalOpen(false); setEditingProxy(null); setNameSuffix(''); fetchProxies(); } else {
-      const data = await res.json();
-      alert(data.error || 'Không thể lưu proxy');
+    setIsSubmitting(true);
+    try {
+      const res = await fetch(url, { method, headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` }, body: JSON.stringify(finalProxy) });
+      if (res.status === 401) {
+        onUnauthorized();
+        return;
+      }
+      if (res.ok) { 
+        setIsModalOpen(false); 
+        setEditingProxy(null); 
+        setNameSuffix(''); 
+        fetchProxies(); 
+      } else {
+        const data = await res.json();
+        alert(data.error || 'Không thể lưu proxy');
+      }
+    } catch (e: any) {
+      alert('Lỗi kết nối khi lưu proxy: ' + (e.message || e));
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
@@ -665,14 +704,20 @@ const ProxiesPage: React.FC<{ agents: DashboardAgent[], token: string, onUnautho
                 <div>
                   <label className="text-xs text-gray-500 font-bold uppercase mb-1 block">Cổng Công khai</label>
                   <input type="number" placeholder="8001" value={newProxy.remote_port} onChange={e=>setNewProxy({...newProxy, remote_port:parseInt(e.target.value)})} className="w-full bg-white/5 border border-white/10 rounded-xl p-3 text-white outline-none focus:border-neon-blue/50"/>
+                  <p className="text-[10px] text-gray-400 mt-1">Không giới hạn dải cổng (có thể nhập bất kỳ cổng nào từ 1 - 65535 chưa bị trùng).</p>
                 </div>
               )}
 
               <div className="pt-4 flex flex-col gap-2">
-                <button onClick={handleCreate} className="w-full bg-neon-blue text-black font-bold py-4 rounded-2xl hover:shadow-[0_0_20px_rgba(0,243,255,0.4)] transition-all">
-                  {editingProxy ? 'Cập nhật Tunnel' : 'Tạo Tunnel mới'}
+                <button 
+                  disabled={isSubmitting}
+                  onClick={handleCreate} 
+                  className={`w-full bg-neon-blue text-black font-bold py-4 rounded-2xl transition-all flex items-center justify-center gap-2 ${isSubmitting ? 'opacity-50 cursor-not-allowed' : 'hover:shadow-[0_0_20px_rgba(0,243,255,0.4)]'}`}
+                >
+                  {isSubmitting && <Loader2 className="animate-spin" size={18} />}
+                  {editingProxy ? (isSubmitting ? 'Đang cập nhật...' : 'Cập nhật Tunnel') : (isSubmitting ? 'Đang tạo...' : 'Tạo Tunnel mới')}
                 </button>
-                <button onClick={()=>setIsModalOpen(false)} className="w-full text-gray-500 py-2 hover:text-white transition-colors">Hủy bỏ</button>
+                <button disabled={isSubmitting} onClick={()=>setIsModalOpen(false)} className="w-full text-gray-500 py-2 hover:text-white transition-colors">Hủy bỏ</button>
               </div>
             </div>
           </div>
@@ -730,6 +775,611 @@ const ProxyStatusBadge: React.FC<{ status?: string }> = ({ status }) => {
   );
 };
 
+const EmergencyModal: React.FC<{
+  agent: DashboardAgent;
+  token: string;
+  onClose: () => void;
+}> = ({ agent, token, onClose }) => {
+  const isLinux = Boolean(
+    agent.os?.toLowerCase().includes('linux') ||
+    agent.os?.toLowerCase().includes('ubuntu') ||
+    agent.os?.toLowerCase().includes('debian') ||
+    agent.os?.toLowerCase().includes('centos') ||
+    agent.os?.toLowerCase().includes('arch') ||
+    agent.os?.toLowerCase().includes('fedora') ||
+    agent.os?.toLowerCase().includes('alpine')
+  );
+
+  const [activeTab, setActiveTab] = useState<'ssh' | 'password' | 'script' | 'rotate'>(isLinux ? 'ssh' : 'password');
+  const [secretKey, setSecretKey] = useState('');
+  
+  // Tab SSH Key (Linux)
+  const [sshAccount, setSshAccount] = useState('root');
+  const [sshPublicKey, setSshPublicKey] = useState('');
+
+  // Tab Reset Password
+  const [accountName, setAccountName] = useState(isLinux ? 'root' : 'Administrator');
+  const [newPassword, setNewPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  
+  // Tab Custom Shell/PowerShell
+  const [customScript, setCustomScript] = useState(
+    isLinux
+      ? `whoami\nuname -a\nid\n`
+      : `Write-Host "ComputerName: $env:COMPUTERNAME"\nGet-LocalUser\n`
+  );
+  const [outputLogs, setOutputLogs] = useState<string[]>([]);
+  
+  // Tab Rotate Secret Key
+  const [oldKey, setOldKey] = useState('');
+  const [newKey, setNewKey] = useState('');
+  const [confirmNewKey, setConfirmNewKey] = useState('');
+
+  const [loading, setLoading] = useState(false);
+  const [statusMessage, setStatusMessage] = useState<{ type: 'success' | 'error', text: string } | null>(null);
+
+  const fetchRecentLogs = async () => {
+    try {
+      const res = await fetch(`/api/v1/logs?agent_id=${agent.id}&limit=25`, {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      if (res.ok) {
+        const data = await res.json();
+        const lines = data.map((l: any) => `[${new Date(l.timestamp).toLocaleTimeString()}] [${l.log_level}] ${l.message}`);
+        setOutputLogs(lines);
+      }
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
+  const handleInjectSSH = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!secretKey) {
+      setStatusMessage({ type: 'error', text: 'Vui lòng nhập Emergency Secret Key của máy chủ này' });
+      return;
+    }
+    if (!sshPublicKey.trim()) {
+      setStatusMessage({ type: 'error', text: 'Vui lòng nhập SSH Public Key' });
+      return;
+    }
+    setLoading(true);
+    setStatusMessage(null);
+    try {
+      const res = await fetch(`/api/v1/agents/${agent.id}/emergency/inject-ssh-key`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({
+          secret_key: secretKey,
+          account_name: sshAccount.trim() || 'root',
+          ssh_public_key: sshPublicKey.trim()
+        })
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setStatusMessage({ type: 'success', text: data.message || 'Lệnh chèn SSH Key đã được gửi.' });
+        setTimeout(fetchRecentLogs, 2000);
+      } else {
+        setStatusMessage({ type: 'error', text: data.error || 'Lỗi gửi lệnh' });
+      }
+    } catch (err: any) {
+      setStatusMessage({ type: 'error', text: err.message || 'Lỗi kết nối' });
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleResetPassword = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!secretKey) {
+      setStatusMessage({ type: 'error', text: 'Vui lòng nhập Emergency Secret Key của máy chủ này' });
+      return;
+    }
+    if (!newPassword || newPassword !== confirmPassword) {
+      setStatusMessage({ type: 'error', text: 'Mật khẩu mới không khớp hoặc bị để trống' });
+      return;
+    }
+    setLoading(true);
+    setStatusMessage(null);
+    try {
+      const res = await fetch(`/api/v1/agents/${agent.id}/emergency/reset-password`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({
+          secret_key: secretKey,
+          account_name: accountName.trim() || (isLinux ? 'root' : 'Administrator'),
+          new_password: newPassword
+        })
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setStatusMessage({ type: 'success', text: data.message || 'Lệnh đặt lại mật khẩu đã được gửi.' });
+        setTimeout(fetchRecentLogs, 2000);
+      } else {
+        setStatusMessage({ type: 'error', text: data.error || 'Lỗi gửi lệnh' });
+      }
+    } catch (err: any) {
+      setStatusMessage({ type: 'error', text: err.message || 'Lỗi kết nối' });
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleExecScript = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!secretKey || !customScript) {
+      setStatusMessage({ type: 'error', text: 'Vui lòng nhập Secret Key và lệnh thực thi' });
+      return;
+    }
+    setLoading(true);
+    setStatusMessage(null);
+    try {
+      const res = await fetch(`/api/v1/agents/${agent.id}/emergency/exec`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({
+          secret_key: secretKey,
+          script: customScript
+        })
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setStatusMessage({ type: 'success', text: data.message || 'Lệnh khẩn cấp đã được gửi tới máy chủ.' });
+        setTimeout(fetchRecentLogs, 1500);
+      } else {
+        setStatusMessage({ type: 'error', text: data.error || 'Lỗi gửi lệnh' });
+      }
+    } catch (err: any) {
+      setStatusMessage({ type: 'error', text: err.message || 'Lỗi kết nối' });
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleRotateKey = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!oldKey || !newKey) {
+      setStatusMessage({ type: 'error', text: 'Vui lòng nhập đầy đủ Secret Key cũ và mới' });
+      return;
+    }
+    if (newKey !== confirmNewKey) {
+      setStatusMessage({ type: 'error', text: 'Xác nhận Secret Key mới không khớp' });
+      return;
+    }
+    setLoading(true);
+    setStatusMessage(null);
+    try {
+      const res = await fetch(`/api/v1/agents/${agent.id}/emergency/rotate-key`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({
+          old_secret_key: oldKey,
+          new_secret_key: newKey
+        })
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setStatusMessage({ type: 'success', text: data.message || 'Đổi Secret Key thành công.' });
+        setSecretKey(newKey);
+        setOldKey('');
+        setNewKey('');
+        setConfirmNewKey('');
+      } else {
+        setStatusMessage({ type: 'error', text: data.error || 'Lỗi đổi Secret Key' });
+      }
+    } catch (err: any) {
+      setStatusMessage({ type: 'error', text: err.message || 'Lỗi kết nối' });
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/80 backdrop-blur-md p-4">
+      <div className="glass max-w-2xl w-full p-6 sm:p-8 rounded-[32px] border border-amber-500/30 max-h-[90vh] overflow-y-auto space-y-6 shadow-[0_0_50px_rgba(245,158,11,0.15)]">
+        <div className="flex justify-between items-start">
+          <div>
+            <h2 className="text-2xl font-bold text-white flex items-center gap-2">
+              <ShieldAlert className="text-amber-400" size={28} /> Cứu Hộ Khẩn Cấp (Emergency Fallback)
+            </h2>
+            <p className="text-gray-400 text-sm mt-1">
+              Máy chủ: <strong className="text-white">{agent.name || agent.hostname}</strong> ({agent.hostname}) · OS: <span className="text-neon-blue font-bold uppercase">{agent.os || (isLinux ? 'Linux' : 'Windows')}</span> · Quyền <span className="text-amber-400 font-mono font-bold">{isLinux ? 'root (UID 0)' : 'NT AUTHORITY\\SYSTEM'}</span>
+            </p>
+          </div>
+          <button onClick={onClose} className="text-gray-500 hover:text-white p-2">
+            <X size={20} />
+          </button>
+        </div>
+
+        {/* Tab Navigation */}
+        <div className="flex border-b border-white/10 gap-2 overflow-x-auto">
+          {isLinux && (
+            <button
+              onClick={() => { setActiveTab('ssh'); setStatusMessage(null); }}
+              className={`px-4 py-3 text-sm font-bold border-b-2 transition-all flex items-center gap-2 whitespace-nowrap ${
+                activeTab === 'ssh'
+                  ? 'border-amber-400 text-amber-400 bg-amber-400/5'
+                  : 'border-transparent text-gray-400 hover:text-white'
+              }`}
+            >
+              <Key size={16} /> Chèn SSH Public Key
+            </button>
+          )}
+          <button
+            onClick={() => { setActiveTab('password'); setStatusMessage(null); }}
+            className={`px-4 py-3 text-sm font-bold border-b-2 transition-all flex items-center gap-2 whitespace-nowrap ${
+              activeTab === 'password'
+                ? 'border-amber-400 text-amber-400 bg-amber-400/5'
+                : 'border-transparent text-gray-400 hover:text-white'
+            }`}
+          >
+            <Lock size={16} /> {isLinux ? 'Đổi Mật Khẩu (root/user)' : 'Đổi Mật Khẩu Admin'}
+          </button>
+          <button
+            onClick={() => { setActiveTab('script'); setStatusMessage(null); }}
+            className={`px-4 py-3 text-sm font-bold border-b-2 transition-all flex items-center gap-2 whitespace-nowrap ${
+              activeTab === 'script'
+                ? 'border-amber-400 text-amber-400 bg-amber-400/5'
+                : 'border-transparent text-gray-400 hover:text-white'
+            }`}
+          >
+            <Terminal size={16} /> {isLinux ? 'Bash Shell Khẩn Cấp' : 'PowerShell Khẩn Cấp'}
+          </button>
+          <button
+            onClick={() => { setActiveTab('rotate'); setStatusMessage(null); }}
+            className={`px-4 py-3 text-sm font-bold border-b-2 transition-all flex items-center gap-2 whitespace-nowrap ${
+              activeTab === 'rotate'
+                ? 'border-amber-400 text-amber-400 bg-amber-400/5'
+                : 'border-transparent text-gray-400 hover:text-white'
+            }`}
+          >
+            <RotateCw size={16} /> Đổi Secret Key
+          </button>
+        </div>
+
+        {statusMessage && (
+          <div className={`p-4 rounded-2xl text-sm flex items-center gap-2 ${
+            statusMessage.type === 'success' 
+              ? 'bg-green-500/10 border border-green-500/30 text-green-400' 
+              : 'bg-red-500/10 border border-red-500/30 text-red-400'
+          }`}>
+            {statusMessage.type === 'success' ? <CheckCircle2 size={18} /> : <AlertTriangle size={18} />}
+            <span>{statusMessage.text}</span>
+          </div>
+        )}
+
+        {/* Tab SSH: Inject SSH Public Key (Linux) */}
+        {activeTab === 'ssh' && isLinux && (
+          <form onSubmit={handleInjectSSH} className="space-y-4">
+            <div className="bg-white/5 border border-white/10 rounded-2xl p-4 text-xs text-gray-400 space-y-1">
+              <div className="font-bold text-amber-400 flex items-center gap-1.5">
+                <Key size={14} /> Khôi phục quyền truy cập SSH máy Linux:
+              </div>
+              <p>
+                Agent chạy dưới quyền <strong>root</strong> sẽ tự động lưu SSH Public Key vào file <code>authorized_keys</code> của tài khoản đã chọn (mặc định là <code>/root/.ssh/authorized_keys</code>), phân quyền <code>600</code> an toàn và đảm bảo dịch vụ <code>sshd</code> đang hoạt động để bạn đăng nhập SSH ngay lập tức.
+              </p>
+            </div>
+
+            <div>
+              <div className="flex items-center justify-between mb-2">
+                <label className="text-xs font-bold text-amber-300 uppercase">
+                  Emergency Secret Key (Bắt buộc)
+                </label>
+                <button
+                  type="button"
+                  onClick={async () => {
+                    try {
+                      const text = await navigator.clipboard.readText();
+                      if (text) setSecretKey(text.trim());
+                    } catch {}
+                  }}
+                  className="text-[11px] text-neon-blue hover:underline flex items-center gap-1"
+                >
+                  <Copy size={12} /> Dán từ clipboard
+                </button>
+              </div>
+              <input
+                type="password"
+                value={secretKey}
+                onChange={(e) => setSecretKey(e.target.value)}
+                placeholder="pm_sec_..."
+                className="w-full bg-black/40 border border-amber-500/30 rounded-2xl px-4 py-3 text-white font-mono focus:outline-none focus:border-amber-400"
+                required
+              />
+            </div>
+
+            <div>
+              <label className="block text-xs font-bold text-gray-400 uppercase mb-2">Tài khoản Linux mục tiêu</label>
+              <input
+                type="text"
+                value={sshAccount}
+                onChange={(e) => setSshAccount(e.target.value)}
+                placeholder="root"
+                className="w-full bg-white/5 border border-white/10 rounded-2xl px-4 py-3 text-white focus:outline-none focus:border-neon-blue font-mono text-sm"
+                required
+              />
+            </div>
+
+            <div>
+              <label className="block text-xs font-bold text-gray-400 uppercase mb-2">
+                Nội dung SSH Public Key (id_ed25519.pub / id_rsa.pub)
+              </label>
+              <textarea
+                value={sshPublicKey}
+                onChange={(e) => setSshPublicKey(e.target.value)}
+                rows={4}
+                className="w-full bg-black/60 border border-white/10 rounded-2xl p-4 text-xs font-mono text-green-400 focus:outline-none focus:border-neon-blue resize-y"
+                placeholder="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI... user@laptop"
+                required
+              />
+            </div>
+
+            <div className="pt-2 flex gap-3">
+              <button
+                type="submit"
+                disabled={loading}
+                className="flex-1 bg-amber-500 hover:bg-amber-400 text-black font-bold py-3.5 rounded-2xl shadow-[0_0_20px_rgba(245,158,11,0.3)] transition-all flex items-center justify-center gap-2 disabled:opacity-60"
+              >
+                {loading ? <Loader2 className="animate-spin" size={18} /> : <><Key size={18} /> Chèn SSH Key & Kích Hoạt SSH</>}
+              </button>
+              <button
+                type="button"
+                onClick={onClose}
+                className="flex-1 bg-white/5 text-gray-400 hover:text-white py-3.5 rounded-2xl transition-colors"
+              >
+                Đóng
+              </button>
+            </div>
+          </form>
+        )}
+
+        {/* Tab 1: Reset Password Form */}
+        {activeTab === 'password' && (
+          <form onSubmit={handleResetPassword} className="space-y-4">
+            <div className="bg-white/5 border border-white/10 rounded-2xl p-4 text-xs text-gray-400 space-y-1">
+              <div className="font-bold text-amber-400 flex items-center gap-1.5">
+                <Lock size={14} /> Cơ chế Fallback khi máy bị hack / mất quyền:
+              </div>
+              <p>
+                Agent sẽ sử dụng quyền <strong>{isLinux ? 'root' : 'SYSTEM'}</strong> để đặt lại mật khẩu và kích hoạt lại tài khoản đã chọn, bất kể tài khoản bị vô hiệu hóa hay đổi mật khẩu bởi bên thứ ba.
+              </p>
+            </div>
+
+            <div>
+              <div className="flex items-center justify-between mb-2">
+                <label className="text-xs font-bold text-amber-300 uppercase">
+                  Emergency Secret Key (Bắt buộc)
+                </label>
+                <button
+                  type="button"
+                  onClick={async () => {
+                    try {
+                      const text = await navigator.clipboard.readText();
+                      if (text) setSecretKey(text.trim());
+                    } catch {}
+                  }}
+                  className="text-[11px] text-neon-blue hover:underline flex items-center gap-1"
+                >
+                  <Copy size={12} /> Dán từ clipboard
+                </button>
+              </div>
+              <input
+                type="password"
+                value={secretKey}
+                onChange={(e) => setSecretKey(e.target.value)}
+                placeholder="pm_sec_..."
+                className="w-full bg-black/40 border border-amber-500/30 rounded-2xl px-4 py-3 text-white font-mono focus:outline-none focus:border-amber-400"
+                required
+              />
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div>
+                <label className="block text-xs font-bold text-gray-400 uppercase mb-2">{isLinux ? 'Tên tài khoản Linux' : 'Tên tài khoản Windows'}</label>
+                <input
+                  type="text"
+                  value={accountName}
+                  onChange={(e) => setAccountName(e.target.value)}
+                  placeholder={isLinux ? 'root' : 'Administrator'}
+                  className="w-full bg-white/5 border border-white/10 rounded-2xl px-4 py-3 text-white focus:outline-none focus:border-neon-blue"
+                  required
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-bold text-gray-400 uppercase mb-2">Mật khẩu mới</label>
+                <input
+                  type="password"
+                  value={newPassword}
+                  onChange={(e) => setNewPassword(e.target.value)}
+                  placeholder="••••••••"
+                  className="w-full bg-white/5 border border-white/10 rounded-2xl px-4 py-3 text-white focus:outline-none focus:border-neon-blue"
+                  required
+                />
+              </div>
+            </div>
+
+            <div>
+              <label className="block text-xs font-bold text-gray-400 uppercase mb-2">Xác nhận mật khẩu mới</label>
+              <input
+                type="password"
+                value={confirmPassword}
+                onChange={(e) => setConfirmPassword(e.target.value)}
+                placeholder="••••••••"
+                className="w-full bg-white/5 border border-white/10 rounded-2xl px-4 py-3 text-white focus:outline-none focus:border-neon-blue"
+                required
+              />
+            </div>
+
+            <div className="pt-2 flex gap-3">
+              <button
+                type="submit"
+                disabled={loading}
+                className="flex-1 bg-amber-500 hover:bg-amber-400 text-black font-bold py-3.5 rounded-2xl shadow-[0_0_20px_rgba(245,158,11,0.3)] transition-all flex items-center justify-center gap-2 disabled:opacity-60"
+              >
+                {loading ? <Loader2 className="animate-spin" size={18} /> : <><Lock size={18} /> Thực Hiện Đổi Mật Khẩu Khẩn Cấp</>}
+              </button>
+              <button
+                type="button"
+                onClick={onClose}
+                className="flex-1 bg-white/5 text-gray-400 hover:text-white py-3.5 rounded-2xl transition-colors"
+              >
+                Đóng
+              </button>
+            </div>
+          </form>
+        )}
+
+        {/* Tab Script: Custom Bash / PowerShell Form */}
+        {activeTab === 'script' && (
+          <form onSubmit={handleExecScript} className="space-y-4">
+            <div>
+              <div className="flex items-center justify-between mb-2">
+                <label className="text-xs font-bold text-amber-300 uppercase">
+                  Emergency Secret Key (Bắt buộc)
+                </label>
+                <button
+                  type="button"
+                  onClick={async () => {
+                    try {
+                      const text = await navigator.clipboard.readText();
+                      if (text) setSecretKey(text.trim());
+                    } catch {}
+                  }}
+                  className="text-[11px] text-neon-blue hover:underline flex items-center gap-1"
+                >
+                  <Copy size={12} /> Dán từ clipboard
+                </button>
+              </div>
+              <input
+                type="password"
+                value={secretKey}
+                onChange={(e) => setSecretKey(e.target.value)}
+                placeholder="pm_sec_..."
+                className="w-full bg-black/40 border border-amber-500/30 rounded-2xl px-4 py-3 text-white font-mono focus:outline-none focus:border-amber-400"
+                required
+              />
+            </div>
+
+            <div>
+              <label className="block text-xs font-bold text-gray-400 uppercase mb-2">
+                {isLinux ? 'Bash Script (Chạy dưới quyền root)' : 'PowerShell Script (Chạy dưới quyền SYSTEM)'}
+              </label>
+              <textarea
+                value={customScript}
+                onChange={(e) => setCustomScript(e.target.value)}
+                rows={6}
+                className="w-full bg-black/60 border border-white/10 rounded-2xl p-4 text-xs font-mono text-green-400 focus:outline-none focus:border-neon-blue resize-y"
+                placeholder={isLinux ? "# Nhập lệnh bash shell..." : "# Nhập lệnh PowerShell..."}
+                required
+              />
+            </div>
+
+            <div className="flex gap-3">
+              <button
+                type="submit"
+                disabled={loading}
+                className="flex-1 bg-amber-500 hover:bg-amber-400 text-black font-bold py-3 rounded-2xl transition-all flex items-center justify-center gap-2 disabled:opacity-60"
+              >
+                {loading ? <Loader2 className="animate-spin" size={18} /> : <><Terminal size={18} /> Chạy Lệnh Khẩn Cấp</>}
+              </button>
+              <button
+                type="button"
+                onClick={fetchRecentLogs}
+                className="px-4 bg-white/5 text-neon-blue border border-neon-blue/20 hover:bg-neon-blue/10 rounded-2xl text-xs font-bold flex items-center gap-1.5"
+              >
+                <RotateCw size={14} /> Làm mới log
+              </button>
+            </div>
+
+            {outputLogs.length > 0 && (
+              <div className="space-y-1">
+                <div className="text-[10px] text-gray-400 uppercase font-bold">Kết quả thực thi thời gian thực:</div>
+                <pre className="bg-black/80 border border-white/10 rounded-2xl p-4 text-[11px] font-mono text-gray-300 max-h-48 overflow-y-auto whitespace-pre-wrap">
+                  {outputLogs.join('\n')}
+                </pre>
+              </div>
+            )}
+          </form>
+        )}
+
+        {/* Tab 3: Rotate Secret Key Form */}
+        {activeTab === 'rotate' && (
+          <form onSubmit={handleRotateKey} className="space-y-4">
+            <div className="bg-white/5 border border-white/10 rounded-2xl p-4 text-xs text-gray-400">
+              Chỉ có thể thay đổi Secret Key khi nhập đúng <strong>Secret Key hiện tại</strong>. Sau khi đổi, Secret Key cũ sẽ bị vô hiệu hóa hoàn toàn.
+            </div>
+
+            <div>
+              <label className="block text-xs font-bold text-gray-400 uppercase mb-2">Secret Key Hiện Tại</label>
+              <input
+                type="password"
+                value={oldKey}
+                onChange={(e) => setOldKey(e.target.value)}
+                placeholder="pm_sec_..."
+                className="w-full bg-white/5 border border-white/10 rounded-2xl px-4 py-3 text-white font-mono focus:outline-none focus:border-neon-blue"
+                required
+              />
+            </div>
+
+            <div>
+              <label className="block text-xs font-bold text-amber-300 uppercase mb-2">Secret Key Mới</label>
+              <input
+                type="password"
+                value={newKey}
+                onChange={(e) => setNewKey(e.target.value)}
+                placeholder="Nhập secret key mới (ít nhất 8 ký tự)..."
+                className="w-full bg-black/40 border border-amber-500/30 rounded-2xl px-4 py-3 text-white font-mono focus:outline-none focus:border-amber-400"
+                required
+              />
+            </div>
+
+            <div>
+              <label className="block text-xs font-bold text-gray-400 uppercase mb-2">Xác nhận Secret Key Mới</label>
+              <input
+                type="password"
+                value={confirmNewKey}
+                onChange={(e) => setConfirmNewKey(e.target.value)}
+                placeholder="Nhập lại secret key mới..."
+                className="w-full bg-white/5 border border-white/10 rounded-2xl px-4 py-3 text-white font-mono focus:outline-none focus:border-neon-blue"
+                required
+              />
+            </div>
+
+            <div className="pt-2 flex gap-3">
+              <button
+                type="submit"
+                disabled={loading}
+                className="flex-1 bg-amber-500 hover:bg-amber-400 text-black font-bold py-3.5 rounded-2xl transition-all flex items-center justify-center gap-2 disabled:opacity-60"
+              >
+                {loading ? <Loader2 className="animate-spin" size={18} /> : <><RotateCw size={18} /> Cập Nhật Secret Key Mới</>}
+              </button>
+              <button
+                type="button"
+                onClick={onClose}
+                className="flex-1 bg-white/5 text-gray-400 hover:text-white py-3.5 rounded-2xl transition-colors"
+              >
+                Đóng
+              </button>
+            </div>
+          </form>
+        )}
+      </div>
+    </div>
+  );
+};
+
 const AgentsPage: React.FC<{ agents: DashboardAgent[], token: string, onRefresh: () => void }> = ({ agents, token, onRefresh }) => {
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -739,7 +1389,72 @@ const AgentsPage: React.FC<{ agents: DashboardAgent[], token: string, onRefresh:
     linux: 'Bấm "Tạo & sao chép" để sinh link cài đặt dùng 1 lần.',
     windows: 'Bấm "Tạo & sao chép" để sinh link cài đặt dùng 1 lần.'
   });
+  const [emergencyKeys, setEmergencyKeys] = useState<Record<string, string>>({});
   const [generatingInstall, setGeneratingInstall] = useState<string | null>(null);
+
+  // Emergency Modal State
+  const [emergencyAgent, setEmergencyAgent] = useState<DashboardAgent | null>(null);
+
+  // Assign Manager State
+  const [assigningAgent, setAssigningAgent] = useState<DashboardAgent | null>(null);
+  const [verifiedMembers, setVerifiedMembers] = useState<User[]>([]);
+  const [selectedUserIds, setSelectedUserIds] = useState<number[]>([]);
+  const [loadingMembers, setLoadingMembers] = useState(false);
+  const [savingManagers, setSavingManagers] = useState(false);
+
+  const openAssignModal = async (agent: DashboardAgent) => {
+    setAssigningAgent(agent);
+    setSelectedUserIds((agent.managers || []).map(m => m.user_id));
+    setLoadingMembers(true);
+    try {
+      const res = await fetch('/api/v1/members/verified', {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setVerifiedMembers(Array.isArray(data) ? data : []);
+      } else {
+        setVerifiedMembers([]);
+      }
+    } catch (err) {
+      console.error('Failed to fetch verified members:', err);
+      setVerifiedMembers([]);
+    } finally {
+      setLoadingMembers(false);
+    }
+  };
+
+  const toggleUserId = (userId: number) => {
+    setSelectedUserIds(prev => 
+      prev.includes(userId) ? prev.filter(id => id !== userId) : [...prev, userId]
+    );
+  };
+
+  const handleSaveManagers = async () => {
+    if (!assigningAgent) return;
+    setSavingManagers(true);
+    try {
+      const res = await fetch(`/api/v1/agents/${assigningAgent.id}/managers`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({ user_ids: selectedUserIds })
+      });
+      if (res.ok) {
+        onRefresh();
+        setAssigningAgent(null);
+      } else {
+        const data = await res.json();
+        alert(data.error || 'Không thể lưu danh sách người quản lý');
+      }
+    } catch (err) {
+      console.error('Failed to save managers:', err);
+    } finally {
+      setSavingManagers(false);
+    }
+  };
 
   const startEdit = (agent: DashboardAgent) => {
     setEditingId(agent.id);
@@ -787,6 +1502,9 @@ const AgentsPage: React.FC<{ agents: DashboardAgent[], token: string, onRefresh:
       throw new Error(`Failed to create ${os} install token`);
     }
     const data = await res.json();
+    if (data.emergency_secret_key) {
+      setEmergencyKeys(prev => ({ ...prev, [os]: data.emergency_secret_key }));
+    }
     return data.command as string;
   };
 
@@ -811,7 +1529,7 @@ const AgentsPage: React.FC<{ agents: DashboardAgent[], token: string, onRefresh:
         <div className="flex flex-col sm:flex-row items-start justify-between gap-6 mb-8">
           <div>
             <h1 className="text-3xl font-bold text-white">Máy chủ (Agents)</h1>
-            <p className="text-gray-400 mt-2">Cài đặt nhanh lên các máy chủ cần quản lý.</p>
+            <p className="text-gray-400 mt-2">Cài đặt nhanh lên các máy chủ cần quản lý & phân quyền thông báo.</p>
           </div>
           <div className="flex items-center gap-4 bg-white/5 p-4 rounded-2xl border border-white/5">
             <div className="text-right">
@@ -827,6 +1545,7 @@ const AgentsPage: React.FC<{ agents: DashboardAgent[], token: string, onRefresh:
             title="Linux"
             description="Ubuntu, Debian, CentOS"
             command={installCommands.linux}
+            emergencyKey={emergencyKeys.linux}
             copied={copiedKey === 'linux'}
             loading={generatingInstall === 'linux'}
             onCopy={() => handleCopy('linux')}
@@ -836,6 +1555,7 @@ const AgentsPage: React.FC<{ agents: DashboardAgent[], token: string, onRefresh:
               title="Windows"
               description="Chạy trong Admin PowerShell"
               command={installCommands.windows}
+              emergencyKey={emergencyKeys.windows}
               copied={copiedKey === 'windows'}
               loading={generatingInstall === 'windows'}
               onCopy={() => handleCopy('windows')}
@@ -862,6 +1582,7 @@ const AgentsPage: React.FC<{ agents: DashboardAgent[], token: string, onRefresh:
                 <th className="px-6 py-4">Tên / Hostname</th>
                 <th>Địa chỉ IP</th>
                 <th>Hệ điều hành</th>
+                <th>Người quản lý (Nhận mail)</th>
                 <th>Trạng thái</th>
                 <th>Kết nối cuối</th>
                 <th className="px-6 py-4 text-right">Thao tác</th>
@@ -903,16 +1624,52 @@ const AgentsPage: React.FC<{ agents: DashboardAgent[], token: string, onRefresh:
                   <td>{agent.private_ip || '-'}</td>
                   <td>{agent.os || '-'}</td>
                   <td>
+                    <div className="flex flex-wrap items-center gap-1.5 py-1">
+                      {(agent.managers && agent.managers.length > 0) ? (
+                        agent.managers.map((m) => (
+                          <span key={m.user_id} className="inline-flex items-center gap-1 bg-neon-blue/10 border border-neon-blue/20 text-neon-blue px-2.5 py-1 rounded-lg text-xs font-mono" title={m.email || m.username}>
+                            <Mail size={12} />
+                            <span className="max-w-[130px] truncate">{m.email || m.username}</span>
+                          </span>
+                        ))
+                      ) : (
+                        <span className="text-gray-500 text-xs italic">Chưa gán quản lý</span>
+                      )}
+                      <button
+                        onClick={() => openAssignModal(agent)}
+                        className="p-1.5 text-gray-400 hover:text-neon-blue bg-white/5 hover:bg-white/10 rounded-lg transition-colors flex items-center gap-1 text-xs"
+                        title="Gán người quản lý máy"
+                      >
+                        <UserCheck size={14} />
+                        <span className="hidden sm:inline">Gán</span>
+                      </button>
+                    </div>
+                  </td>
+                  <td>
                     <span className={agent.status === 'online' ? 'text-green-400 flex items-center gap-2' : 'text-gray-500 flex items-center gap-2'}>
                       <span className={`w-1.5 h-1.5 rounded-full ${agent.status==='online'?'bg-green-400 animate-pulse':'bg-gray-500'}`} />
                       {agent.status === 'online' ? 'Trực tuyến' : 'Ngoại tuyến'}
                     </span>
                   </td>
                   <td>{agent.last_heartbeat ? new Date(agent.last_heartbeat).toLocaleTimeString() : '-'}</td>
-                  <td className="px-6 py-4 text-right"></td>
+                  <td className="px-6 py-4 text-right space-x-2">
+                    <button
+                      onClick={() => setEmergencyAgent(agent)}
+                      className="text-xs bg-amber-500/10 hover:bg-amber-500/20 text-amber-400 border border-amber-500/30 px-3 py-1.5 rounded-xl transition-all inline-flex items-center gap-1.5 font-bold"
+                      title="Cứu hộ khẩn cấp & Đổi mật khẩu Administrator"
+                    >
+                      <ShieldAlert size={14} /> Cứu hộ
+                    </button>
+                    <button
+                      onClick={() => openAssignModal(agent)}
+                      className="text-xs bg-white/5 hover:bg-neon-blue/20 text-neon-blue border border-white/10 hover:border-neon-blue/30 px-3 py-1.5 rounded-xl transition-all inline-flex items-center gap-1"
+                    >
+                      <UserCheck size={14} /> Phân quyền
+                    </button>
+                  </td>
                 </tr>
               )) : (
-                <tr><td colSpan={6} className="px-6 py-10 text-center text-gray-500 italic">Chưa có agent nào đăng ký.</td></tr>
+                <tr><td colSpan={7} className="px-6 py-10 text-center text-gray-500 italic">Chưa có agent nào đăng ký.</td></tr>
               )}
             </tbody>
           </table>
@@ -965,8 +1722,41 @@ const AgentsPage: React.FC<{ agents: DashboardAgent[], token: string, onRefresh:
                   <div className="text-gray-500 text-[10px] uppercase mb-1">IP nội bộ</div>
                   <div className="text-gray-300 truncate">{agent.private_ip || '-'}</div>
                 </div>
+                <div className="bg-white/5 p-3 rounded-xl col-span-2">
+                  <div className="flex justify-between items-center mb-1.5">
+                    <span className="text-gray-500 text-[10px] uppercase font-bold">Người quản lý máy (Nhận mail cảnh báo)</span>
+                    <button onClick={() => openAssignModal(agent)} className="text-xs text-neon-blue hover:underline flex items-center gap-1">
+                      <UserCheck size={12} /> Cài đặt
+                    </button>
+                  </div>
+                  <div className="flex flex-wrap gap-1">
+                    {(agent.managers && agent.managers.length > 0) ? (
+                      agent.managers.map((m) => (
+                        <span key={m.user_id} className="inline-flex items-center gap-1 bg-neon-blue/10 border border-neon-blue/20 text-neon-blue px-2 py-0.5 rounded-lg text-xs font-mono">
+                          <Mail size={12} /> {m.email || m.username}
+                        </span>
+                      ))
+                    ) : (
+                      <span className="text-gray-500 text-xs italic">Chưa có người quản lý</span>
+                    )}
+                  </div>
+                </div>
               </div>
-              <div className="text-center text-[10px] text-gray-500 border-t border-white/5 pt-3">
+              <div className="flex gap-2 pt-2 border-t border-white/5">
+                <button
+                  onClick={() => setEmergencyAgent(agent)}
+                  className="flex-1 text-xs bg-amber-500/10 hover:bg-amber-500/20 text-amber-400 border border-amber-500/30 py-2 rounded-xl transition-all flex items-center justify-center gap-1.5 font-bold"
+                >
+                  <ShieldAlert size={14} /> Cứu hộ khẩn cấp
+                </button>
+                <button
+                  onClick={() => openAssignModal(agent)}
+                  className="flex-1 text-xs bg-white/5 hover:bg-neon-blue/20 text-neon-blue border border-white/10 py-2 rounded-xl transition-all flex items-center justify-center gap-1"
+                >
+                  <UserCheck size={14} /> Phân quyền
+                </button>
+              </div>
+              <div className="text-center text-[10px] text-gray-500 border-t border-white/5 pt-2">
                 Lần cuối liên lạc: {agent.last_heartbeat ? new Date(agent.last_heartbeat).toLocaleString() : '-'}
               </div>
             </div>
@@ -975,6 +1765,141 @@ const AgentsPage: React.FC<{ agents: DashboardAgent[], token: string, onRefresh:
           )}
         </div>
       </div>
+
+      {/* Modal Gán Người Quản Lý Máy */}
+      {assigningAgent && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/80 backdrop-blur-md p-4">
+          <div className="glass max-w-lg w-full p-6 sm:p-8 rounded-[32px] border border-white/10 max-h-[90vh] overflow-y-auto">
+            <div className="flex justify-between items-start mb-6">
+              <div>
+                <h2 className="text-2xl font-bold text-white flex items-center gap-2">
+                  <UserCheck className="text-neon-blue" size={24} /> Gán Người Quản Lý Máy
+                </h2>
+                <p className="text-gray-400 text-sm mt-1">
+                  Máy chủ: <strong className="text-white">{assigningAgent.name || assigningAgent.hostname}</strong> ({assigningAgent.hostname})
+                </p>
+              </div>
+              <button onClick={() => setAssigningAgent(null)} className="text-gray-500 hover:text-white p-2">
+                <X size={20} />
+              </button>
+            </div>
+
+            <div className="p-3 bg-neon-blue/5 border border-neon-blue/20 rounded-2xl mb-6 text-xs text-gray-300 space-y-1">
+              <div className="font-bold text-neon-blue flex items-center gap-1">
+                <CheckCircle2 size={14} /> Quy định gửi thông báo qua Mail Server admin@c500.net:
+              </div>
+              <p className="text-gray-400 leading-relaxed">
+                Chỉ các thành viên đã xác thực địa chỉ email mới hiển thị trong danh sách này. Người quản lý được gán sẽ tự động nhận email khi:
+              </p>
+              <ul className="list-disc pl-5 text-gray-400 space-y-0.5 mt-1">
+                <li>🔴 Máy bị mất kết nối (Offline) - Báo 1 lần khi tắt</li>
+                <li>🟢 Máy kết nối lại thành công (Online) - Báo 1 lần khi mở</li>
+                <li>⚠️ Tải CPU &gt; 95% hoặc RAM &gt; 95% hoặc Disk &gt; 95% - Giới hạn tối đa 30 phút gửi 1 lần</li>
+              </ul>
+            </div>
+
+            {loadingMembers ? (
+              <div className="py-12 text-center text-gray-400 flex flex-col items-center gap-3">
+                <Loader2 className="animate-spin text-neon-blue" size={28} />
+                <span>Đang tải danh sách thành viên đã xác thực...</span>
+              </div>
+            ) : (!verifiedMembers || verifiedMembers.length === 0) ? (
+              <div className="p-8 text-center glass rounded-2xl border border-white/5 space-y-3">
+                <AlertTriangle className="mx-auto text-amber-400" size={32} />
+                <p className="text-white font-bold">Chưa có thành viên nào xác thực email</p>
+                <p className="text-xs text-gray-400">
+                  Vui lòng chuyển qua tab <strong>Người dùng</strong> hoặc <strong>Hồ sơ cá nhân</strong> để thêm email và thực hiện xác thực mã OTP trước khi gán vào máy chủ.
+                </p>
+              </div>
+            ) : (
+              <div className="space-y-3 mb-6">
+                <div className="flex justify-between items-center text-xs text-gray-400 px-1">
+                  <span>Chọn thành viên ({selectedUserIds.length}/{(verifiedMembers || []).length} đã chọn)</span>
+                  <div className="space-x-2">
+                    <button 
+                      onClick={() => setSelectedUserIds((verifiedMembers || []).map(m => m.id!))}
+                      className="text-neon-blue hover:underline"
+                    >
+                      Chọn tất cả
+                    </button>
+                    <span>|</span>
+                    <button 
+                      onClick={() => setSelectedUserIds([])}
+                      className="text-gray-400 hover:text-white"
+                    >
+                      Bỏ chọn hết
+                    </button>
+                  </div>
+                </div>
+
+                <div className="max-h-60 overflow-y-auto space-y-2 pr-1">
+                  {(verifiedMembers || []).map((member) => {
+                    const isSelected = selectedUserIds.includes(member.id!);
+                    return (
+                      <div
+                        key={member.id}
+                        onClick={() => toggleUserId(member.id!)}
+                        className={`p-3 rounded-2xl border cursor-pointer flex items-center justify-between transition-all duration-200 ${
+                          isSelected
+                            ? 'bg-neon-blue/10 border-neon-blue/40 text-white shadow-[0_0_15px_rgba(0,243,255,0.1)]'
+                            : 'bg-white/5 border-white/5 text-gray-300 hover:bg-white/10'
+                        }`}
+                      >
+                        <div className="flex items-center gap-3">
+                          <div className={`w-5 h-5 rounded-lg border flex items-center justify-center transition-colors ${
+                            isSelected ? 'bg-neon-blue border-neon-blue text-black' : 'border-white/20 bg-transparent'
+                          }`}>
+                            {isSelected && <Check size={14} strokeWidth={3} />}
+                          </div>
+                          <div>
+                            <div className="font-bold text-sm flex items-center gap-2">
+                              {member.username}
+                              <span className="text-[10px] font-normal px-2 py-0.5 rounded-full bg-white/10 text-gray-400 uppercase">
+                                {member.role}
+                              </span>
+                            </div>
+                            <div className="text-xs text-neon-blue font-mono">{member.email}</div>
+                          </div>
+                        </div>
+                        <span className="text-[10px] text-green-400 bg-green-400/10 px-2 py-0.5 rounded-full border border-green-400/20 font-bold uppercase">
+                          Đã xác thực
+                        </span>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+
+            <div className="pt-4 flex gap-3">
+              <button
+                type="button"
+                onClick={handleSaveManagers}
+                disabled={savingManagers}
+                className="flex-1 bg-neon-blue text-black font-bold py-3.5 rounded-2xl hover:shadow-[0_0_20px_rgba(0,243,255,0.4)] transition-all flex items-center justify-center gap-2"
+              >
+                {savingManagers ? <Loader2 className="animate-spin" size={18} /> : <>Lưu danh sách quản lý</>}
+              </button>
+              <button
+                type="button"
+                onClick={() => setAssigningAgent(null)}
+                className="flex-1 bg-white/5 text-gray-400 hover:text-white py-3.5 rounded-2xl transition-colors"
+              >
+                Đóng
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal Cứu Hộ Khẩn Cấp & Đổi Mật Khẩu Administrator */}
+      {emergencyAgent && (
+        <EmergencyModal
+          agent={emergencyAgent}
+          token={token}
+          onClose={() => setEmergencyAgent(null)}
+        />
+      )}
     </div>
   );
 };
@@ -994,6 +1919,272 @@ const LogsPage: React.FC<{ logs: LogEntry[] }> = ({ logs }) => (
     </div>
   </div>
 );
+
+const AlertSettingsCard: React.FC<{
+  settings: SettingEntry[];
+  onSaveMultiple: (entries: SettingEntry[]) => Promise<void>;
+}> = ({ settings, onSaveMultiple }) => {
+  const getVal = (key: string, defaultVal: string) => {
+    const found = settings.find(s => s.key === key);
+    return found ? found.value : defaultVal;
+  };
+
+  const [cpuInterval, setCpuInterval] = useState('30');
+  const [cpuThreshold, setCpuThreshold] = useState('95');
+  const [ramInterval, setRamInterval] = useState('30');
+  const [ramThreshold, setRamThreshold] = useState('95');
+  const [diskInterval, setDiskInterval] = useState('30');
+  const [diskThreshold, setDiskThreshold] = useState('95');
+  const [offlineTimeout, setOfflineTimeout] = useState('30');
+  const [stateCooldown, setStateCooldown] = useState('5');
+
+  const [saving, setSaving] = useState(false);
+  const [saved, setSaved] = useState(false);
+
+  useEffect(() => {
+    setCpuInterval(getVal('alert_interval_cpu_minutes', '30'));
+    setCpuThreshold(getVal('alert_threshold_cpu', '95'));
+    setRamInterval(getVal('alert_interval_ram_minutes', '30'));
+    setRamThreshold(getVal('alert_threshold_ram', '95'));
+    setDiskInterval(getVal('alert_interval_disk_minutes', '30'));
+    setDiskThreshold(getVal('alert_threshold_disk', '95'));
+    setOfflineTimeout(getVal('alert_offline_timeout_seconds', '30'));
+    setStateCooldown(getVal('alert_state_cooldown_minutes', '5'));
+  }, [settings]);
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setSaving(true);
+    setSaved(false);
+    try {
+      await onSaveMultiple([
+        { key: 'alert_interval_cpu_minutes', value: cpuInterval },
+        { key: 'alert_threshold_cpu', value: cpuThreshold },
+        { key: 'alert_interval_ram_minutes', value: ramInterval },
+        { key: 'alert_threshold_ram', value: ramThreshold },
+        { key: 'alert_interval_disk_minutes', value: diskInterval },
+        { key: 'alert_threshold_disk', value: diskThreshold },
+        { key: 'alert_offline_timeout_seconds', value: offlineTimeout },
+        { key: 'alert_state_cooldown_minutes', value: stateCooldown },
+      ]);
+      setSaved(true);
+      setTimeout(() => setSaved(false), 3000);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="glass rounded-[32px] p-8 border border-white/10 space-y-6">
+      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-white/5 pb-6">
+        <div>
+          <div className="flex items-center gap-2.5">
+            <div className="p-2.5 bg-amber-500/10 border border-amber-500/20 rounded-2xl text-amber-400">
+              <Bell size={22} />
+            </div>
+            <div>
+              <h2 className="text-xl font-bold text-white">Giới hạn Cảnh báo & Thông báo Email</h2>
+              <p className="text-xs text-gray-400 mt-0.5">
+                Cấu hình thời gian gửi thư độc lập cho từng loại lỗi. Máy mở và tắt chỉ gửi đúng 1 lần duy nhất.
+              </p>
+            </div>
+          </div>
+        </div>
+        <div className="flex items-center gap-2">
+          {saved && (
+            <span className="text-xs text-green-400 bg-green-500/10 border border-green-500/20 px-3 py-1.5 rounded-xl flex items-center gap-1">
+              <Check size={14} /> Đã lưu thành công
+            </span>
+          )}
+          <button
+            onClick={handleSubmit}
+            disabled={saving}
+            className="bg-neon-blue hover:bg-neon-blue/80 text-black font-bold px-6 py-2.5 rounded-xl transition-all flex items-center gap-2 text-sm disabled:opacity-50"
+          >
+            {saving ? <Loader2 size={16} className="animate-spin" /> : <Save size={16} />}
+            {saving ? 'Đang lưu...' : 'Lưu cấu hình'}
+          </button>
+        </div>
+      </div>
+
+      {/* Thông tin quy tắc bất biến */}
+      <div className="p-4 bg-neon-blue/5 border border-neon-blue/20 rounded-2xl flex items-start gap-3 text-xs text-gray-300">
+        <CheckCircle2 size={18} className="text-neon-blue shrink-0 mt-0.5" />
+        <div className="space-y-1">
+          <p className="font-bold text-white">Quy tắc thông báo trạng thái Mở / Tắt máy (Online / Offline):</p>
+          <p className="text-gray-400 leading-relaxed">
+            Hệ thống đảm bảo <strong>chỉ gửi đúng 1 email khi máy bị tắt (Offline)</strong> và <strong>1 email khi máy kết nối lại thành công (Online)</strong>. Toàn bộ các lần kiểm tra lặp lại sau đó sẽ bị chặn để tuyệt đối không gây spam hòm thư.
+          </p>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+        {/* CPU Alert Settings */}
+        <div className="p-5 glass rounded-2xl border border-white/5 space-y-4">
+          <div className="flex items-center gap-2 text-sm font-bold text-white">
+            <Cpu size={16} className="text-neon-blue" />
+            <span>Cảnh báo CPU</span>
+          </div>
+          <div className="space-y-3 text-xs">
+            <div>
+              <label className="text-gray-400 block mb-1">Ngưỡng kích hoạt cảnh báo (%)</label>
+              <div className="relative">
+                <input
+                  type="number"
+                  min="1"
+                  max="100"
+                  value={cpuThreshold}
+                  onChange={(e) => setCpuThreshold(e.target.value)}
+                  className="w-full bg-white/5 border border-white/10 rounded-xl px-3 py-2 text-white font-mono"
+                />
+                <span className="absolute right-3 top-2 text-gray-500">%</span>
+              </div>
+            </div>
+            <div>
+              <label className="text-gray-400 block mb-1">Giới hạn gửi lại (Mỗi X phút gửi 1 lần)</label>
+              <div className="relative">
+                <input
+                  type="number"
+                  min="1"
+                  max="1440"
+                  value={cpuInterval}
+                  onChange={(e) => setCpuInterval(e.target.value)}
+                  className="w-full bg-white/5 border border-white/10 rounded-xl px-3 py-2 text-white font-mono"
+                />
+                <span className="absolute right-3 top-2 text-gray-500">phút</span>
+              </div>
+              <p className="text-[10px] text-gray-500 mt-1">Mặc định: 30 phút / lần</p>
+            </div>
+          </div>
+        </div>
+
+        {/* RAM Alert Settings */}
+        <div className="p-5 glass rounded-2xl border border-white/5 space-y-4">
+          <div className="flex items-center gap-2 text-sm font-bold text-white">
+            <Activity size={16} className="text-amber-400" />
+            <span>Cảnh báo RAM</span>
+          </div>
+          <div className="space-y-3 text-xs">
+            <div>
+              <label className="text-gray-400 block mb-1">Ngưỡng kích hoạt cảnh báo (%)</label>
+              <div className="relative">
+                <input
+                  type="number"
+                  min="1"
+                  max="100"
+                  value={ramThreshold}
+                  onChange={(e) => setRamThreshold(e.target.value)}
+                  className="w-full bg-white/5 border border-white/10 rounded-xl px-3 py-2 text-white font-mono"
+                />
+                <span className="absolute right-3 top-2 text-gray-500">%</span>
+              </div>
+            </div>
+            <div>
+              <label className="text-gray-400 block mb-1">Giới hạn gửi lại (Mỗi X phút gửi 1 lần)</label>
+              <div className="relative">
+                <input
+                  type="number"
+                  min="1"
+                  max="1440"
+                  value={ramInterval}
+                  onChange={(e) => setRamInterval(e.target.value)}
+                  className="w-full bg-white/5 border border-white/10 rounded-xl px-3 py-2 text-white font-mono"
+                />
+                <span className="absolute right-3 top-2 text-gray-500">phút</span>
+              </div>
+              <p className="text-[10px] text-gray-500 mt-1">Mặc định: 30 phút / lần</p>
+            </div>
+          </div>
+        </div>
+
+        {/* Disk Alert Settings */}
+        <div className="p-5 glass rounded-2xl border border-white/5 space-y-4">
+          <div className="flex items-center gap-2 text-sm font-bold text-white">
+            <Server size={16} className="text-rose-400" />
+            <span>Cảnh báo Ổ đĩa (Disk)</span>
+          </div>
+          <div className="space-y-3 text-xs">
+            <div>
+              <label className="text-gray-400 block mb-1">Ngưỡng kích hoạt cảnh báo (%)</label>
+              <div className="relative">
+                <input
+                  type="number"
+                  min="1"
+                  max="100"
+                  value={diskThreshold}
+                  onChange={(e) => setDiskThreshold(e.target.value)}
+                  className="w-full bg-white/5 border border-white/10 rounded-xl px-3 py-2 text-white font-mono"
+                />
+                <span className="absolute right-3 top-2 text-gray-500">%</span>
+              </div>
+            </div>
+            <div>
+              <label className="text-gray-400 block mb-1">Giới hạn gửi lại (Mỗi X phút gửi 1 lần)</label>
+              <div className="relative">
+                <input
+                  type="number"
+                  min="1"
+                  max="1440"
+                  value={diskInterval}
+                  onChange={(e) => setDiskInterval(e.target.value)}
+                  className="w-full bg-white/5 border border-white/10 rounded-xl px-3 py-2 text-white font-mono"
+                />
+                <span className="absolute right-3 top-2 text-gray-500">phút</span>
+              </div>
+              <p className="text-[10px] text-gray-500 mt-1">Mặc định: 30 phút / lần</p>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-6 pt-2">
+        {/* Offline Heartbeat Timeout */}
+        <div className="p-5 glass rounded-2xl border border-white/5 space-y-3 text-xs">
+          <div className="flex items-center gap-2 font-bold text-white">
+            <Clock size={16} className="text-neon-blue" />
+            <span>Thời gian nhận diện Mất kết nối (Offline Timeout)</span>
+          </div>
+          <div className="relative">
+            <input
+              type="number"
+              min="10"
+              max="600"
+              value={offlineTimeout}
+              onChange={(e) => setOfflineTimeout(e.target.value)}
+              className="w-full bg-white/5 border border-white/10 rounded-xl px-3 py-2 text-white font-mono"
+            />
+            <span className="absolute right-3 top-2 text-gray-500">giây</span>
+          </div>
+          <p className="text-[10px] text-gray-500">
+            Nếu máy không gửi tín hiệu quá thời gian này, hệ thống sẽ xác nhận Offline và gửi email báo tắt máy (1 lần duy nhất).
+          </p>
+        </div>
+
+        {/* State Anti-flapping */}
+        <div className="p-5 glass rounded-2xl border border-white/5 space-y-3 text-xs">
+          <div className="flex items-center gap-2 font-bold text-white">
+            <Shield size={16} className="text-green-400" />
+            <span>Khoảng cách chống chập chờn mạng (Anti-flapping)</span>
+          </div>
+          <div className="relative">
+            <input
+              type="number"
+              min="1"
+              max="60"
+              value={stateCooldown}
+              onChange={(e) => setStateCooldown(e.target.value)}
+              className="w-full bg-white/5 border border-white/10 rounded-xl px-3 py-2 text-white font-mono"
+            />
+            <span className="absolute right-3 top-2 text-gray-500">phút</span>
+          </div>
+          <p className="text-[10px] text-gray-500">
+            Khoảng cách tối thiểu giữa 2 lần gửi mail đổi trạng thái nếu mạng chập chờn rớt liên tục. Mặc định: 5 phút.
+          </p>
+        </div>
+      </div>
+    </div>
+  );
+};
 
 const SettingsPage: React.FC<{ token: string, onUnauthorized: () => void }> = ({ token, onUnauthorized }) => {
   const [settings, setSettings] = useState<SettingEntry[]>([]);
@@ -1066,6 +2257,25 @@ const SettingsPage: React.FC<{ token: string, onUnauthorized: () => void }> = ({
     }
   };
 
+  const saveMultipleSettings = async (entries: SettingEntry[]) => {
+    setError('');
+    setNotice('');
+    try {
+      for (const entry of entries) {
+        await fetch('/api/v1/settings', {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+          body: JSON.stringify(entry)
+        });
+      }
+      setNotice('Đã cập nhật toàn bộ cấu hình cảnh báo thành công.');
+      setTimeout(() => setNotice(''), 3000);
+      await fetchSettings();
+    } catch {
+      setError('Lỗi khi lưu cài đặt cảnh báo.');
+    }
+  };
+
   const addSetting = async () => {
     const key = newKey.trim();
     if (!key) return;
@@ -1077,14 +2287,18 @@ const SettingsPage: React.FC<{ token: string, onUnauthorized: () => void }> = ({
   return (
     <div className="animate-in fade-in slide-in-from-bottom-4 duration-500 space-y-8">
       <div className="glass rounded-[32px] p-8 border border-white/10">
-        <h1 className="text-3xl font-bold text-white">Cấu hình</h1>
-        <p className="text-gray-400 mt-2">Quản lý các cài đặt Key-Value trên hệ thống.</p>
+        <h1 className="text-3xl font-bold text-white">Cấu hình hệ thống</h1>
+        <p className="text-gray-400 mt-2">Quản lý các giới hạn cảnh báo, quy định gửi email và các tham số vận hành.</p>
         {error && <p className="mt-4 text-sm text-red-400">{error}</p>}
         {notice && <p className="mt-4 text-sm text-green-400">{notice}</p>}
       </div>
 
+      {/* Cấu hình Giới hạn cảnh báo & Thông báo Email */}
+      <AlertSettingsCard settings={settings} onSaveMultiple={saveMultipleSettings} />
+
+      {/* Cấu hình nâng cao Key-Value */}
       <div className="glass rounded-[32px] p-8 border border-white/10">
-        <h2 className="text-xl font-bold text-white mb-4">Thêm mới cài đặt</h2>
+        <h2 className="text-xl font-bold text-white mb-4">Thêm mới cài đặt tuỳ chỉnh</h2>
         <div className="grid gap-4 md:grid-cols-[1fr,1fr,auto]">
           <input value={newKey} onChange={(e) => setNewKey(e.target.value)} placeholder="Key" className="bg-white/5 border border-white/10 rounded-xl p-3 text-white" />
           <input value={newValue} onChange={(e) => setNewValue(e.target.value)} placeholder="Value" className="bg-white/5 border border-white/10 rounded-xl p-3 text-white" />
@@ -1094,7 +2308,7 @@ const SettingsPage: React.FC<{ token: string, onUnauthorized: () => void }> = ({
 
       <div className="glass rounded-[32px] overflow-hidden border border-white/10">
         <div className="px-8 py-6 border-b border-white/5">
-          <h2 className="text-xl font-bold text-white">Cài đặt hiện tại</h2>
+          <h2 className="text-xl font-bold text-white">Tất cả tham số Key-Value</h2>
         </div>
         {loading ? (
           <div className="p-8 text-gray-400">Đang tải...</div>
@@ -1240,13 +2454,53 @@ const AgentMonitorPage: React.FC<{ agents: DashboardAgent[], token: string, onUn
       </div>
 
       <div className="glass rounded-[32px] p-6 sm:p-8 border border-white/10">
-        <h2 className="text-xl font-bold text-white mb-6">Thông tin hệ thống</h2>
+        <h2 className="text-xl font-bold text-white mb-6">Thông tin hệ thống & Tài nguyên</h2>
         {activeAgent ? (
-          <div className="grid gap-4 grid-cols-1 sm:grid-cols-2 lg:grid-cols-4">
-            <InfoTile label="Tên máy chủ" value={activeAgent.hostname} />
-            <InfoTile label="IP Nội bộ" value={activeAgent.private_ip || '-'} />
-            <InfoTile label="Hệ điều hành" value={activeAgent.os || '-'} />
-            <InfoTile label="Liên lạc lần cuối" value={activeAgent.last_heartbeat ? new Date(activeAgent.last_heartbeat).toLocaleTimeString() : '-'} />
+          <div className="space-y-6">
+            <div className="grid gap-4 grid-cols-1 sm:grid-cols-2 lg:grid-cols-4">
+              <InfoTile label="Tên máy chủ" value={activeAgent.hostname} />
+              <InfoTile label="IP Nội bộ" value={activeAgent.private_ip || '-'} />
+              <InfoTile label="Hệ điều hành" value={activeAgent.os || '-'} />
+              <InfoTile label="Liên lạc lần cuối" value={activeAgent.last_heartbeat ? new Date(activeAgent.last_heartbeat).toLocaleTimeString() : '-'} />
+            </div>
+
+            {currentHardware && ((currentHardware.disk_total && currentHardware.disk_total > 0) || (currentHardware.cpu_temp && currentHardware.cpu_temp > 0)) ? (
+              <div className="grid gap-6 grid-cols-1 md:grid-cols-2 pt-4 border-t border-white/5">
+                {currentHardware.disk_total && currentHardware.disk_total > 0 ? (
+                  <div className="rounded-2xl bg-white/5 p-5 border border-white/5 space-y-3">
+                    <div className="text-gray-500 uppercase text-[10px] font-bold tracking-widest">Ổ cứng chính (/)</div>
+                    <div className="flex justify-between items-end">
+                      <span className="text-white font-bold">
+                        {Math.round((currentHardware.disk_used! / currentHardware.disk_total) * 100)}% đã dùng
+                      </span>
+                      <span className="text-gray-400 text-xs">
+                        {formatBytes(currentHardware.disk_used!)} / {formatBytes(currentHardware.disk_total)}
+                      </span>
+                    </div>
+                    <div className="w-full bg-white/10 rounded-full h-2 overflow-hidden">
+                      <div 
+                        className="bg-neon-blue h-full rounded-full transition-all duration-500" 
+                        style={{ width: `${Math.min(100, Math.round((currentHardware.disk_used! / currentHardware.disk_total) * 100))}%` }}
+                      />
+                    </div>
+                  </div>
+                ) : null}
+
+                {currentHardware.cpu_temp && currentHardware.cpu_temp > 0 ? (
+                  <div className="rounded-2xl bg-white/5 p-5 border border-white/5 flex flex-col justify-center">
+                    <div className="text-gray-500 uppercase text-[10px] font-bold tracking-widest mb-2">Nhiệt độ CPU</div>
+                    <div className="flex items-center gap-3">
+                      <span className={`text-2xl font-bold ${currentHardware.cpu_temp > 75 ? 'text-red-500' : currentHardware.cpu_temp > 60 ? 'text-yellow-500' : 'text-green-400'}`}>
+                        {currentHardware.cpu_temp.toFixed(1)}°C
+                      </span>
+                      <span className="text-xs text-gray-400 italic">
+                        {currentHardware.cpu_temp > 75 ? 'Rất nóng' : currentHardware.cpu_temp > 60 ? 'Ấm' : 'Bình thường'}
+                      </span>
+                    </div>
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
           </div>
         ) : (
           <p className="text-gray-500 italic">Chọn một agent để xem chi tiết.</p>
@@ -1269,9 +2523,20 @@ const UsersPage: React.FC<{ token: string, onUnauthorized: () => void }> = ({ to
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingUser, setEditingUser] = useState<any>(null);
   const [username, setUsername] = useState('');
+  const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [role, setRole] = useState('user');
   const [error, setError] = useState('');
+  const [isSubmitting, setIsSubmitting] = useState(false);
+
+  // OTP Verification Modal State
+  const [isVerifyModalOpen, setIsVerifyModalOpen] = useState(false);
+  const [verifyingUser, setVerifyingUser] = useState<any>(null);
+  const [otpCode, setOtpCode] = useState('');
+  const [otpLoading, setOtpLoading] = useState(false);
+  const [otpError, setOtpError] = useState('');
+  const [otpSuccess, setOtpSuccess] = useState('');
+  const [resending, setResending] = useState(false);
 
   const fetchUsers = async () => {
     try {
@@ -1285,13 +2550,15 @@ const UsersPage: React.FC<{ token: string, onUnauthorized: () => void }> = ({ to
 
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isSubmitting) return;
     setError('');
     const url = editingUser ? `/api/v1/users/${editingUser.id}` : '/api/v1/users';
     const method = editingUser ? 'PUT' : 'POST';
-    const payload: any = { role };
+    const payload: any = { role, email: email.trim() };
     if (!editingUser) payload.username = username;
     if (password) payload.password = password;
     
+    setIsSubmitting(true);
     try {
       const res = await fetch(url, {
         method,
@@ -1305,7 +2572,11 @@ const UsersPage: React.FC<{ token: string, onUnauthorized: () => void }> = ({ to
       }
       setIsModalOpen(false);
       fetchUsers();
-    } catch (err: any) { setError(err.message); }
+    } catch (err: any) { 
+      setError(err.message); 
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   const handleDelete = async (id: number) => {
@@ -1317,20 +2588,98 @@ const UsersPage: React.FC<{ token: string, onUnauthorized: () => void }> = ({ to
     } catch {}
   };
 
+  const openVerifyModal = (u: any) => {
+    setVerifyingUser(u);
+    setOtpCode('');
+    setOtpError('');
+    setOtpSuccess('');
+    setIsVerifyModalOpen(true);
+  };
+
+  const handleVerifyOTP = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!verifyingUser) return;
+    setOtpLoading(true);
+    setOtpError('');
+    setOtpSuccess('');
+    try {
+      const res = await fetch('/api/v1/auth/verify-email', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({ user_id: verifyingUser.id, code: otpCode.trim() })
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error || 'Xác thực không thành công');
+      }
+      setOtpSuccess(data.message || 'Xác thực thành công!');
+      fetchUsers();
+      setTimeout(() => {
+        setIsVerifyModalOpen(false);
+      }, 1500);
+    } catch (err: any) {
+      setOtpError(err.message);
+    } finally {
+      setOtpLoading(false);
+    }
+  };
+
+  const handleResendCode = async (userId: number) => {
+    setResending(true);
+    setOtpError('');
+    setOtpSuccess('');
+    try {
+      const res = await fetch('/api/v1/auth/resend-code', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({ user_id: userId })
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error || 'Không thể gửi lại mã OTP');
+      }
+      setOtpSuccess(data.message || 'Đã gửi mã OTP mới');
+    } catch (err: any) {
+      setOtpError(err.message);
+    } finally {
+      setResending(false);
+    }
+  };
+
   return (
     <div className="animate-in fade-in slide-in-from-bottom-4 duration-500">
       <div className="flex flex-col sm:flex-row sm:justify-between sm:items-end gap-4 mb-8">
         <div>
-          <h1 className="text-3xl font-bold text-white">Người dùng</h1>
-          <p className="text-gray-400 mt-2">Quản lý truy cập và quyền hạn.</p>
+          <h1 className="text-3xl font-bold text-white">Người dùng & Member</h1>
+          <p className="text-gray-400 mt-2">Quản lý tài khoản, xác thực email thành viên để gán quản lý máy chủ.</p>
         </div>
-        <button onClick={() => { setEditingUser(null); setUsername(''); setPassword(''); setRole('user'); setIsModalOpen(true); }} className="bg-neon-blue text-black font-bold px-6 py-3 rounded-xl flex items-center gap-2"><Plus size={20} /> Thêm người dùng</button>
+        <button 
+          onClick={() => { setEditingUser(null); setUsername(''); setEmail(''); setPassword(''); setRole('user'); setIsModalOpen(true); }} 
+          className="bg-neon-blue text-black font-bold px-6 py-3 rounded-xl flex items-center gap-2"
+        >
+          <Plus size={20} /> Thêm người dùng
+        </button>
       </div>
 
       <div className="glass rounded-[32px] overflow-hidden border border-white/10">
         {loading ? <div className="p-8 text-center text-gray-500">Đang tải...</div> : (
           <table className="w-full text-left">
-            <thead className="bg-white/5 text-gray-400 text-xs uppercase"><tr><th className="px-6 py-4">Tên đăng nhập</th><th>Quyền</th><th>Ngày tạo</th><th className="text-right px-6">Thao tác</th></tr></thead>
+            <thead className="bg-white/5 text-gray-400 text-xs uppercase">
+              <tr>
+                <th className="px-6 py-4">Tên đăng nhập</th>
+                <th>Email nhận cảnh báo</th>
+                <th>Trạng thái xác thực</th>
+                <th>Quyền</th>
+                <th>Ngày tạo</th>
+                <th className="text-right px-6">Thao tác</th>
+              </tr>
+            </thead>
             <tbody className="divide-y divide-white/5 text-gray-300">
               {users.map(u => (
                 <tr key={u.id} className="border-b border-white/5">
@@ -1338,11 +2687,63 @@ const UsersPage: React.FC<{ token: string, onUnauthorized: () => void }> = ({ to
                     <img src={`https://ui-avatars.com/api/?name=${u.username}&background=00f3ff`} className="w-8 h-8 rounded-full" alt="" />
                     {u.username}
                   </td>
+                  <td className="font-mono text-xs">
+                    {u.email ? (
+                      <span className="text-neon-blue flex items-center gap-1.5">
+                        <Mail size={13} /> {u.email}
+                      </span>
+                    ) : (
+                      <span className="text-gray-500 italic">Chưa thiết lập</span>
+                    )}
+                  </td>
+                  <td>
+                    {u.is_verified ? (
+                      <span className="inline-flex items-center gap-1.5 text-green-400 bg-green-400/10 border border-green-400/20 px-3 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider">
+                        <CheckCircle2 size={12} /> Đã xác thực
+                      </span>
+                    ) : (
+                      <div className="flex items-center gap-2">
+                        <span className="inline-flex items-center gap-1 text-amber-400 bg-amber-400/10 border border-amber-400/20 px-2.5 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider">
+                          <AlertTriangle size={12} /> Chưa xác thực
+                        </span>
+                        {u.email && (
+                          <button 
+                            onClick={() => openVerifyModal(u)} 
+                            className="text-[10px] font-bold text-neon-blue hover:text-white bg-neon-blue/10 hover:bg-neon-blue/20 border border-neon-blue/30 px-2 py-0.5 rounded-lg transition-colors"
+                          >
+                            Nhập OTP
+                          </button>
+                        )}
+                        {u.email && (
+                          <button 
+                            onClick={() => handleResendCode(u.id)} 
+                            disabled={resending}
+                            title="Gửi lại mã xác thực OTP" 
+                            className="p-1 text-gray-400 hover:text-neon-blue bg-white/5 hover:bg-white/10 rounded-lg transition-colors"
+                          >
+                            <Send size={12} />
+                          </button>
+                        )}
+                      </div>
+                    )}
+                  </td>
                   <td><span className={`px-2 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider ${u.role==='admin'?'bg-neon-purple/20 text-neon-purple':'bg-white/10 text-gray-400'}`}>{u.role}</span></td>
                   <td className="text-sm text-gray-400">{new Date(u.created_at).toLocaleString()}</td>
                   <td className="text-right px-6 space-x-2">
-                    <button onClick={() => { setEditingUser(u); setUsername(u.username); setPassword(''); setRole(u.role); setIsModalOpen(true); }} className="text-neon-blue hover:text-white p-2"><Edit2 size={16}/></button>
-                    <button onClick={() => handleDelete(u.id)} className="text-red-400 hover:text-red-300 p-2"><Trash2 size={16}/></button>
+                    <button 
+                      onClick={() => { setEditingUser(u); setUsername(u.username); setEmail(u.email || ''); setPassword(''); setRole(u.role); setIsModalOpen(true); }} 
+                      className="text-neon-blue hover:text-white p-2"
+                      title="Chỉnh sửa người dùng"
+                    >
+                      <Edit2 size={16}/>
+                    </button>
+                    <button 
+                      onClick={() => handleDelete(u.id)} 
+                      className="text-red-400 hover:text-red-300 p-2"
+                      title="Xóa người dùng"
+                    >
+                      <Trash2 size={16}/>
+                    </button>
                   </td>
                 </tr>
               ))}
@@ -1351,26 +2752,125 @@ const UsersPage: React.FC<{ token: string, onUnauthorized: () => void }> = ({ to
         )}
       </div>
 
+      {/* Modal Thêm / Sửa Người Dùng */}
       {isModalOpen && (
         <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/80 backdrop-blur-md p-4">
           <div className="glass max-w-md w-full p-8 rounded-[32px] border border-white/10">
             <h2 className="text-2xl font-bold mb-6 text-white">{editingUser ? 'Sửa người dùng' : 'Thêm người dùng mới'}</h2>
             <form onSubmit={handleSave} className="space-y-4">
               {!editingUser && (
-                <div><label className="text-xs text-gray-500 font-bold uppercase mb-1 block">Tên đăng nhập</label><input type="text" value={username} onChange={e=>setUsername(e.target.value)} required className="w-full bg-white/5 border border-white/10 rounded-xl p-3 text-white outline-none focus:border-neon-blue/50" /></div>
+                <div>
+                  <label className="text-xs text-gray-500 font-bold uppercase mb-1 block">Tên đăng nhập</label>
+                  <input type="text" value={username} onChange={e=>setUsername(e.target.value)} required className="w-full bg-white/5 border border-white/10 rounded-xl p-3 text-white outline-none focus:border-neon-blue/50" />
+                </div>
               )}
-              <div><label className="text-xs text-gray-500 font-bold uppercase mb-1 block">{editingUser ? 'Mật khẩu mới (để trống nếu không đổi)' : 'Mật khẩu'}</label><input type="password" value={password} onChange={e=>setPassword(e.target.value)} required={!editingUser} className="w-full bg-white/5 border border-white/10 rounded-xl p-3 text-white outline-none focus:border-neon-blue/50" /></div>
+              <div>
+                <label className="text-xs text-gray-500 font-bold uppercase mb-1 block">Email nhận thông báo máy chủ</label>
+                <input 
+                  type="email" 
+                  placeholder="admin@c500.net hoặc user@domain.com" 
+                  value={email} 
+                  onChange={e=>setEmail(e.target.value)} 
+                  className="w-full bg-white/5 border border-white/10 rounded-xl p-3 text-white outline-none focus:border-neon-blue/50 font-mono text-sm" 
+                />
+                <p className="text-[10px] text-gray-400 mt-1">Hệ thống sẽ gửi mã OTP 6 số từ <strong>admin@c500.net</strong> để xác thực.</p>
+              </div>
+              <div>
+                <label className="text-xs text-gray-500 font-bold uppercase mb-1 block">{editingUser ? 'Mật khẩu mới (để trống nếu không đổi)' : 'Mật khẩu'}</label>
+                <input type="password" value={password} onChange={e=>setPassword(e.target.value)} required={!editingUser} className="w-full bg-white/5 border border-white/10 rounded-xl p-3 text-white outline-none focus:border-neon-blue/50" />
+              </div>
               <div>
                 <label className="text-xs text-gray-500 font-bold uppercase mb-1 block">Vai trò</label>
                 <select value={role} onChange={e=>setRole(e.target.value)} className="w-full bg-white/5 border border-white/10 rounded-xl p-3 text-white outline-none">
-                  <option value="user">Người dùng (Chỉ xem Proxy)</option>
+                  <option value="user">Người dùng / Member (Quản lý máy & nhận mail)</option>
                   <option value="admin">Quản trị viên (Toàn quyền)</option>
                 </select>
               </div>
               {error && <p className="text-red-400 text-sm">{error}</p>}
               <div className="pt-4 flex gap-2">
-                <button type="submit" className="flex-1 bg-neon-blue text-black font-bold py-3 rounded-xl hover:shadow-[0_0_20px_rgba(0,243,255,0.4)]">Lưu lại</button>
-                <button type="button" onClick={()=>setIsModalOpen(false)} className="flex-1 bg-white/5 text-gray-400 hover:text-white py-3 rounded-xl transition-colors">Hủy bỏ</button>
+                <button 
+                  type="submit" 
+                  disabled={isSubmitting} 
+                  className={`flex-1 bg-neon-blue text-black font-bold py-3 rounded-xl transition-all flex items-center justify-center gap-2 ${isSubmitting ? 'opacity-50 cursor-not-allowed' : 'hover:shadow-[0_0_20px_rgba(0,243,255,0.4)]'}`}
+                >
+                  {isSubmitting && <Loader2 className="animate-spin" size={16} />}
+                  {isSubmitting ? 'Đang lưu...' : 'Lưu lại'}
+                </button>
+                <button type="button" disabled={isSubmitting} onClick={()=>setIsModalOpen(false)} className="flex-1 bg-white/5 text-gray-400 hover:text-white py-3 rounded-xl transition-colors">Hủy bỏ</button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Modal Xác Thực Email OTP */}
+      {isVerifyModalOpen && verifyingUser && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/80 backdrop-blur-md p-4">
+          <div className="glass max-w-md w-full p-8 rounded-[32px] border border-white/10">
+            <div className="flex justify-between items-start mb-6">
+              <div>
+                <h2 className="text-2xl font-bold text-white flex items-center gap-2">
+                  <Mail className="text-neon-blue" size={24} /> Xác Thực Email Member
+                </h2>
+                <p className="text-gray-400 text-sm mt-1">
+                  Người dùng: <strong className="text-white">{verifyingUser.username}</strong>
+                </p>
+              </div>
+              <button onClick={() => setIsVerifyModalOpen(false)} className="text-gray-500 hover:text-white p-1">
+                <X size={20} />
+              </button>
+            </div>
+
+            <div className="p-4 bg-white/5 border border-white/10 rounded-2xl mb-6 text-xs text-gray-300">
+              Mã xác thực gồm 6 chữ số đã được gửi đến hòm thư:
+              <div className="text-neon-blue font-bold font-mono text-sm mt-1">{verifyingUser.email}</div>
+            </div>
+
+            <form onSubmit={handleVerifyOTP} className="space-y-4">
+              <div>
+                <label className="text-xs text-gray-500 font-bold uppercase mb-2 block text-center">
+                  Nhập mã OTP (6 chữ số)
+                </label>
+                <input
+                  type="text"
+                  maxLength={6}
+                  placeholder="123456"
+                  value={otpCode}
+                  onChange={(e) => setOtpCode(e.target.value.replace(/\D/g, ''))}
+                  className="w-full bg-black/40 border border-neon-blue/30 rounded-2xl p-4 text-white text-center text-3xl font-mono tracking-[12px] outline-none focus:border-neon-blue focus:shadow-[0_0_20px_rgba(0,243,255,0.3)] transition-all"
+                  autoFocus
+                  required
+                />
+              </div>
+
+              {otpError && <p className="text-red-400 text-xs text-center">{otpError}</p>}
+              {otpSuccess && <p className="text-green-400 text-xs text-center">{otpSuccess}</p>}
+
+              <div className="pt-4 space-y-2">
+                <button
+                  type="submit"
+                  disabled={otpLoading || otpCode.length !== 6}
+                  className="w-full bg-neon-blue text-black font-bold py-3.5 rounded-xl hover:shadow-[0_0_20px_rgba(0,243,255,0.4)] transition-all flex items-center justify-center gap-2 disabled:opacity-50"
+                >
+                  {otpLoading ? <Loader2 className="animate-spin" size={18} /> : <>Xác nhận OTP</>}
+                </button>
+                <div className="flex justify-between items-center pt-2 text-xs">
+                  <button
+                    type="button"
+                    onClick={() => handleResendCode(verifyingUser.id)}
+                    disabled={resending}
+                    className="text-neon-blue hover:underline flex items-center gap-1"
+                  >
+                    <Send size={12} /> {resending ? 'Đang gửi...' : 'Gửi lại mã OTP'}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setIsVerifyModalOpen(false)}
+                    className="text-gray-400 hover:text-white"
+                  >
+                    Hủy bỏ
+                  </button>
+                </div>
               </div>
             </form>
           </div>
@@ -1380,23 +2880,147 @@ const UsersPage: React.FC<{ token: string, onUnauthorized: () => void }> = ({ to
   );
 };
 
-const ProfilePage: React.FC<{ user: User }> = ({ user }) => {
+const ProfilePage: React.FC<{ user: User, onUpdateUser?: (updated: User) => void }> = ({ user, onUpdateUser }) => {
   const [currentPassword, setCurrentPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
-  const [loading, setLoading] = useState(false);
-  const [message, setMessage] = useState('');
-  const [error, setError] = useState('');
+  const [pwdLoading, setPwdLoading] = useState(false);
+  const [pwdMessage, setPwdMessage] = useState('');
+  const [pwdError, setPwdError] = useState('');
+
+  // Email state
+  const [email, setEmail] = useState(user.email || '');
+  const [isVerified, setIsVerified] = useState(user.is_verified || false);
+  const [userId, setUserId] = useState<number | undefined>(user.id);
+  const [emailLoading, setEmailLoading] = useState(false);
+  const [emailMessage, setEmailMessage] = useState('');
+  const [emailError, setEmailError] = useState('');
+
+  // OTP state
+  const [otpCode, setOtpCode] = useState('');
+  const [otpLoading, setOtpLoading] = useState(false);
+  const [showOtpInput, setShowOtpInput] = useState(!user.is_verified && Boolean(user.email));
+
+  const refreshProfile = async () => {
+    try {
+      const res = await fetch('/api/v1/users/me', {
+        headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setEmail(data.email || '');
+        setIsVerified(data.is_verified || false);
+        setUserId(data.id);
+        setShowOtpInput(!data.is_verified && Boolean(data.email));
+        if (onUpdateUser) {
+          onUpdateUser({ ...user, email: data.email, is_verified: data.is_verified, id: data.id });
+        }
+      }
+    } catch (err) {
+      console.error('Failed to refresh profile:', err);
+    }
+  };
+
+  useEffect(() => {
+    refreshProfile();
+  }, []);
+
+  const handleUpdateEmail = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!email.trim()) {
+      setEmailError('Vui lòng nhập địa chỉ email');
+      return;
+    }
+    setEmailLoading(true);
+    setEmailError('');
+    setEmailMessage('');
+    try {
+      const res = await fetch('/api/v1/users/me/email', {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${localStorage.getItem('token')}`
+        },
+        body: JSON.stringify({ email: email.trim() })
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Không thể lưu email');
+      setEmailMessage(data.message || 'Đã lưu email và gửi mã OTP.');
+      setIsVerified(false);
+      setUserId(data.user_id);
+      setShowOtpInput(true);
+    } catch (err: any) {
+      setEmailError(err.message);
+    } finally {
+      setEmailLoading(false);
+    }
+  };
+
+  const handleVerifyOTP = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!otpCode.trim() || !userId) {
+      setEmailError('Vui lòng nhập mã OTP');
+      return;
+    }
+    setOtpLoading(true);
+    setEmailError('');
+    setEmailMessage('');
+    try {
+      const res = await fetch('/api/v1/auth/verify-email', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${localStorage.getItem('token')}`
+        },
+        body: JSON.stringify({ user_id: userId, code: otpCode.trim() })
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Mã OTP không hợp lệ');
+      setEmailMessage(data.message || 'Xác thực email thành công!');
+      setIsVerified(true);
+      setShowOtpInput(false);
+      setOtpCode('');
+      refreshProfile();
+    } catch (err: any) {
+      setEmailError(err.message);
+    } finally {
+      setOtpLoading(false);
+    }
+  };
+
+  const handleResendOTP = async () => {
+    if (!userId) return;
+    setEmailLoading(true);
+    setEmailError('');
+    setEmailMessage('');
+    try {
+      const res = await fetch('/api/v1/auth/resend-code', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${localStorage.getItem('token')}`
+        },
+        body: JSON.stringify({ user_id: userId })
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Không thể gửi lại mã OTP');
+      setEmailMessage(data.message || 'Đã gửi lại mã OTP');
+    } catch (err: any) {
+      setEmailError(err.message);
+    } finally {
+      setEmailLoading(false);
+    }
+  };
 
   const handleChangePassword = async (e: React.FormEvent) => {
     e.preventDefault();
     if (newPassword !== confirmPassword) {
-      setError('Mật khẩu mới không khớp');
+      setPwdError('Mật khẩu mới không khớp');
       return;
     }
-    setLoading(true);
-    setError('');
-    setMessage('');
+    setPwdLoading(true);
+    setPwdError('');
+    setPwdMessage('');
     try {
       const res = await fetch('/api/v1/users/me/password', {
         method: 'PUT',
@@ -1405,44 +3029,146 @@ const ProfilePage: React.FC<{ user: User }> = ({ user }) => {
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Không thể đổi mật khẩu');
-      setMessage('Đã cập nhật mật khẩu thành công');
+      setPwdMessage('Đã cập nhật mật khẩu thành công');
       setCurrentPassword('');
       setNewPassword('');
       setConfirmPassword('');
     } catch (err: any) {
-      setError(err.message);
+      setPwdError(err.message);
     } finally {
-      setLoading(false);
+      setPwdLoading(false);
     }
   };
 
   return (
-    <div className="animate-in fade-in slide-in-from-bottom-4 duration-500">
-      <h1 className="text-3xl font-bold mb-8 text-white">Hồ sơ cá nhân</h1>
+    <div className="animate-in fade-in slide-in-from-bottom-4 duration-500 space-y-8">
+      <div>
+        <h1 className="text-3xl font-bold text-white">Hồ sơ cá nhân & Email nhận thông báo</h1>
+        <p className="text-gray-400 mt-2">Thiết lập email của bạn để nhận cảnh báo khi máy chủ bị mất kết nối hoặc quá tải tài nguyên.</p>
+      </div>
+
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
-        <div className="glass rounded-[32px] p-8 border border-white/10">
-          <div className="flex items-center gap-6 mb-8">
-            <img src={user.avatar} className="w-20 h-20 rounded-full border-2 border-neon-blue" alt="Avatar" />
+        {/* Card 1: Email & Member Verification */}
+        <div className="glass rounded-[32px] p-8 border border-white/10 space-y-6">
+          <div className="flex items-center gap-6">
+            <img src={user.avatar || `https://ui-avatars.com/api/?name=${user.username}&background=00f3ff`} className="w-20 h-20 rounded-full border-2 border-neon-blue" alt="Avatar" />
             <div>
               <h2 className="text-2xl font-bold text-white">{user.username}</h2>
-              <p className="text-neon-blue font-bold uppercase text-xs">{user.role === 'admin' ? 'Quản trị viên' : 'Người dùng'}</p>
+              <div className="flex items-center gap-2 mt-1">
+                <span className="text-neon-blue font-bold uppercase text-xs px-2.5 py-0.5 rounded-full bg-neon-blue/10 border border-neon-blue/20">
+                  {user.role === 'admin' ? 'Quản trị viên' : 'Member / Người dùng'}
+                </span>
+                {isVerified ? (
+                  <span className="inline-flex items-center gap-1 text-green-400 bg-green-400/10 border border-green-400/20 px-2.5 py-0.5 rounded-full text-[10px] font-bold uppercase">
+                    <CheckCircle2 size={12} /> Đã xác thực
+                  </span>
+                ) : (
+                  <span className="inline-flex items-center gap-1 text-amber-400 bg-amber-400/10 border border-amber-400/20 px-2.5 py-0.5 rounded-full text-[10px] font-bold uppercase">
+                    <AlertTriangle size={12} /> Chưa xác thực
+                  </span>
+                )}
+              </div>
             </div>
           </div>
-          <div className="space-y-4 text-gray-400">
-            <div><p className="text-xs uppercase font-bold text-gray-500">Địa chỉ Email</p><p className="text-white">{user.email}</p></div>
+
+          <div className="border-t border-white/5 pt-4 space-y-4">
+            <h3 className="text-lg font-bold text-white flex items-center gap-2">
+              <Mail className="text-neon-blue" size={20} /> Email Nhận Thông Báo Máy Chủ
+            </h3>
+            
+            <form onSubmit={handleUpdateEmail} className="space-y-3">
+              <div>
+                <label className="text-xs text-gray-400 font-bold uppercase mb-1 block">Địa chỉ Email của bạn</label>
+                <div className="flex gap-2">
+                  <input
+                    type="email"
+                    value={email}
+                    onChange={(e) => setEmail(e.target.value)}
+                    placeholder="vidu@gmail.com"
+                    required
+                    className="flex-1 bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-white font-mono text-sm focus:border-neon-blue outline-none"
+                  />
+                  <button
+                    type="submit"
+                    disabled={emailLoading}
+                    className="bg-neon-blue text-black font-bold px-5 py-3 rounded-xl hover:shadow-[0_0_20px_rgba(0,243,255,0.4)] transition-all flex items-center gap-1.5 disabled:opacity-50 text-sm"
+                  >
+                    {emailLoading ? <Loader2 size={16} className="animate-spin" /> : <Save size={16} />}
+                    <span>Lưu & Gửi OTP</span>
+                  </button>
+                </div>
+                <p className="text-[11px] text-gray-400 mt-1.5">
+                  Mail server <strong>admin@c500.net</strong> sẽ gửi mã OTP 6 số đến địa chỉ này để kích hoạt.
+                </p>
+              </div>
+            </form>
+
+            {/* Form nhập mã OTP */}
+            {showOtpInput && (
+              <div className="bg-amber-500/10 border border-amber-500/20 rounded-2xl p-5 space-y-3 animate-in fade-in duration-300">
+                <div className="flex items-center justify-between">
+                  <div className="text-amber-400 font-bold text-xs flex items-center gap-1.5">
+                    <CheckCircle2 size={16} /> Nhập mã OTP 6 số để hoàn tất xác thực:
+                  </div>
+                  <button
+                    type="button"
+                    onClick={handleResendOTP}
+                    disabled={emailLoading}
+                    className="text-xs text-amber-300 hover:text-white hover:underline flex items-center gap-1"
+                  >
+                    <Send size={12} /> Gửi lại mã
+                  </button>
+                </div>
+
+                <form onSubmit={handleVerifyOTP} className="flex gap-2">
+                  <input
+                    type="text"
+                    maxLength={6}
+                    value={otpCode}
+                    onChange={(e) => setOtpCode(e.target.value)}
+                    placeholder="Nhập 6 số..."
+                    required
+                    className="w-40 bg-black/60 border border-amber-500/30 rounded-xl px-4 py-2.5 text-center text-white font-mono text-lg tracking-widest focus:border-amber-400 outline-none"
+                  />
+                  <button
+                    type="submit"
+                    disabled={otpLoading}
+                    className="bg-amber-400 hover:bg-amber-300 text-black font-bold px-5 py-2.5 rounded-xl transition-all flex items-center gap-1.5 text-sm disabled:opacity-50"
+                  >
+                    {otpLoading ? <Loader2 size={16} className="animate-spin" /> : <Check size={16} />}
+                    <span>Xác nhận</span>
+                  </button>
+                </form>
+              </div>
+            )}
+
+            {emailError && <p className="text-red-400 text-xs bg-red-500/10 border border-red-500/20 p-3 rounded-xl">{emailError}</p>}
+            {emailMessage && <p className="text-green-400 text-xs bg-green-500/10 border border-green-500/20 p-3 rounded-xl">{emailMessage}</p>}
           </div>
         </div>
 
-        <div className="glass rounded-[32px] p-8 border border-white/10">
-          <h3 className="text-xl font-bold mb-6 flex items-center gap-2 text-white"><Key size={20} className="text-yellow-400" /> Đổi mật khẩu</h3>
+        {/* Card 2: Change Password */}
+        <div className="glass rounded-[32px] p-8 border border-white/10 space-y-6">
+          <h3 className="text-xl font-bold flex items-center gap-2 text-white">
+            <Key size={20} className="text-yellow-400" /> Đổi Mật Khẩu
+          </h3>
           <form onSubmit={handleChangePassword} className="space-y-4">
-            <input type="password" value={currentPassword} onChange={e=>setCurrentPassword(e.target.value)} placeholder="Mật khẩu hiện tại" required className="w-full bg-white/5 border border-white/10 rounded-xl p-3 text-white focus:border-neon-blue/50 outline-none" />
-            <input type="password" value={newPassword} onChange={e=>setNewPassword(e.target.value)} placeholder="Mật khẩu mới" required minLength={6} className="w-full bg-white/5 border border-white/10 rounded-xl p-3 text-white focus:border-neon-blue/50 outline-none" />
-            <input type="password" value={confirmPassword} onChange={e=>setConfirmPassword(e.target.value)} placeholder="Xác nhận mật khẩu mới" required minLength={6} className="w-full bg-white/5 border border-white/10 rounded-xl p-3 text-white focus:border-neon-blue/50 outline-none" />
-            {error && <p className="text-red-400 text-sm">{error}</p>}
-            {message && <p className="text-green-400 text-sm">{message}</p>}
-            <button type="submit" disabled={loading} className="w-full bg-neon-blue text-black font-bold py-3 rounded-xl disabled:opacity-50 transition-all hover:shadow-[0_0_20px_rgba(0,243,255,0.4)]">
-              {loading ? 'Đang cập nhật...' : 'Cập nhật mật khẩu'}
+            <div>
+              <label className="text-xs text-gray-500 font-bold uppercase mb-1 block">Mật khẩu hiện tại</label>
+              <input type="password" value={currentPassword} onChange={e=>setCurrentPassword(e.target.value)} placeholder="••••••••" required className="w-full bg-white/5 border border-white/10 rounded-xl p-3 text-white focus:border-neon-blue/50 outline-none" />
+            </div>
+            <div>
+              <label className="text-xs text-gray-500 font-bold uppercase mb-1 block">Mật khẩu mới</label>
+              <input type="password" value={newPassword} onChange={e=>setNewPassword(e.target.value)} placeholder="••••••••" required minLength={6} className="w-full bg-white/5 border border-white/10 rounded-xl p-3 text-white focus:border-neon-blue/50 outline-none" />
+            </div>
+            <div>
+              <label className="text-xs text-gray-500 font-bold uppercase mb-1 block">Xác nhận mật khẩu mới</label>
+              <input type="password" value={confirmPassword} onChange={e=>setConfirmPassword(e.target.value)} placeholder="••••••••" required minLength={6} className="w-full bg-white/5 border border-white/10 rounded-xl p-3 text-white focus:border-neon-blue/50 outline-none" />
+            </div>
+            {pwdError && <p className="text-red-400 text-sm">{pwdError}</p>}
+            {pwdMessage && <p className="text-green-400 text-sm">{pwdMessage}</p>}
+            <button type="submit" disabled={pwdLoading} className="w-full bg-neon-blue text-black font-bold py-3.5 rounded-xl disabled:opacity-50 transition-all hover:shadow-[0_0_20px_rgba(0,243,255,0.4)]">
+              {pwdLoading ? 'Đang cập nhật...' : 'Cập nhật mật khẩu'}
             </button>
           </form>
         </div>
@@ -1590,6 +3316,7 @@ const App: React.FC = () => {
               <SidebarItem icon={<Settings size={20}/>} label="Cài đặt" active={activeTab==='settings'} onClick={()=>setActiveTab('settings')}/>
             </>
           )}
+          <SidebarItem icon={<Key size={20}/>} label="API Keys" active={activeTab==='apikeys'} onClick={()=>setActiveTab('apikeys')}/>
           <SidebarItem icon={<FileText size={20}/>} label="Tài liệu" active={activeTab==='docs'} onClick={()=>setActiveTab('docs')}/>
         </nav>
         <div className="p-6 border-t border-white/5">
@@ -1650,9 +3377,10 @@ const App: React.FC = () => {
           {activeTab === 'proxies' && <ProxiesPage agents={agents} token={token!} onUnauthorized={handleUnauthorized} />}
           {activeTab === 'users' && user?.role === 'admin' && <UsersPage token={token!} onUnauthorized={handleUnauthorized} />}
           {activeTab === 'logs' && user?.role === 'admin' && <LogsPage logs={logs} />}
+          {activeTab === 'apikeys' && <ApiKeysPage token={token!} onUnauthorized={handleUnauthorized} />}
           {activeTab === 'docs' && <DocsPage />}
           {activeTab === 'settings' && user?.role === 'admin' && <SettingsPage token={token!} onUnauthorized={handleUnauthorized} />}
-          {activeTab === 'profile' && <ProfilePage user={user!} />}
+          {activeTab === 'profile' && <ProfilePage user={user!} onUpdateUser={(updated) => setUser(updated)} />}
         </div>
       </main>
     </div>
@@ -1672,23 +3400,142 @@ const StatCard: React.FC<{ title: string, value: string, change: string, icon: a
   </div>
 );
 
-const InstallCommandCard: React.FC<{ title: string, description: string, command: string, copied: boolean, loading: boolean, onCopy: () => void }> = ({ title, description, command, copied, loading, onCopy }) => (
-  <div className="rounded-[28px] border border-white/10 bg-white/[0.03] p-6 min-w-0">
-    <div className="flex items-start justify-between gap-4 mb-4">
-      <div>
-        <h3 className="text-lg font-bold text-white">{title}</h3>
-        <p className="text-sm text-gray-400 mt-1">{description} · token hết hạn sau 5 phút</p>
+const InstallCommandCard: React.FC<{ 
+  title: string, 
+  description: string, 
+  command: string, 
+  emergencyKey?: string,
+  copied: boolean, 
+  loading: boolean, 
+  onCopy: () => void 
+}> = ({ title, description, command, emergencyKey, copied, loading, onCopy }) => {
+  const [copiedKey, setCopiedKey] = useState(false);
+  const [copiedAll, setCopiedAll] = useState(false);
+
+  const handleCopyKey = () => {
+    if (emergencyKey) {
+      copyToClipboard(emergencyKey);
+      setCopiedKey(true);
+      setTimeout(() => setCopiedKey(false), 2000);
+    }
+  };
+
+  const handleCopyAll = () => {
+    if (command && emergencyKey) {
+      const allText = `LỆNH CÀI ĐẶT (${title}):\n${command}\n\nEMERGENCY SECRET KEY (CỨU HỘ):\n${emergencyKey}`;
+      copyToClipboard(allText);
+      setCopiedAll(true);
+      setTimeout(() => setCopiedAll(false), 2000);
+    }
+  };
+
+  return (
+    <div className="rounded-[28px] border border-white/10 bg-white/[0.03] p-6 min-w-0 space-y-4 hover:border-white/20 transition-all">
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <h3 className="text-lg font-bold text-white flex items-center gap-2">
+            {title}
+            {emergencyKey && (
+              <span className="text-[10px] bg-green-500/20 text-green-400 border border-green-500/30 px-2 py-0.5 rounded-full font-bold uppercase">
+                Key đã tạo
+              </span>
+            )}
+          </h3>
+          <p className="text-sm text-gray-400 mt-1">{description} · token hết hạn sau 5 phút</p>
+        </div>
+        <button 
+          onClick={onCopy} 
+          disabled={loading} 
+          className="inline-flex items-center gap-2 rounded-xl bg-neon-blue hover:shadow-[0_0_20px_rgba(0,243,255,0.4)] px-4 py-2 text-sm font-bold text-black disabled:opacity-60 transition-all"
+        >
+          {loading ? <Loader2 size={16} className="animate-spin" /> : copied ? <Check size={16} /> : <RotateCw size={16} />}
+          {loading ? 'Đang tạo...' : emergencyKey ? 'Tạo lại Lệnh & Key' : 'Tạo & sao chép'}
+        </button>
       </div>
-      <button onClick={onCopy} disabled={loading} className="inline-flex items-center gap-2 rounded-xl bg-neon-blue px-4 py-2 text-sm font-bold text-black disabled:opacity-60">
-        {loading ? <Loader2 size={16} className="animate-spin" /> : copied ? <Check size={16} /> : <Copy size={16} />}
-        {loading ? 'Đang tạo' : copied ? 'Đã chép' : 'Tạo & sao chép'}
-      </button>
+
+      {/* Box 1: Lệnh Cài Đặt */}
+      <div>
+        <label className="text-[11px] font-bold text-gray-400 uppercase mb-1.5 flex items-center justify-between">
+          <span>Lệnh cài đặt (1 lần):</span>
+          {command.startsWith('powershell') || command.startsWith('curl') ? (
+            <button
+              onClick={() => { copyToClipboard(command); }}
+              className="text-neon-blue hover:underline flex items-center gap-1 text-[10px]"
+            >
+              <Copy size={12} /> Chép lệnh
+            </button>
+          ) : null}
+        </label>
+        <pre className="overflow-x-auto w-full rounded-2xl bg-black/50 border border-white/10 p-3.5 text-xs text-neon-blue whitespace-nowrap font-mono">
+          <code>{command}</code>
+        </pre>
+      </div>
+
+      {/* Box 2: Emergency Secret Key (Luôn hiển thị ô để gán key) */}
+      <div className={`rounded-2xl p-4 space-y-2.5 transition-all duration-300 border ${
+        emergencyKey 
+          ? 'bg-amber-500/10 border-amber-500/30' 
+          : 'bg-white/5 border-dashed border-white/10'
+      }`}>
+        <div className="flex items-center justify-between text-xs">
+          <span className="font-bold flex items-center gap-1.5 text-amber-400">
+            <ShieldAlert size={16} /> Emergency Secret Key (Dùng cứu hộ khi máy bị hack)
+          </span>
+          {emergencyKey ? (
+            <span className="text-[10px] bg-amber-500/20 px-2 py-0.5 rounded text-amber-300 uppercase tracking-wider font-bold">
+              Chỉ hiển thị 1 lần
+            </span>
+          ) : (
+            <span className="text-[10px] text-gray-500 italic">Chưa tạo</span>
+          )}
+        </div>
+
+        <div className="flex items-center gap-2">
+          <input
+            type="text"
+            readOnly
+            value={emergencyKey || ''}
+            placeholder='Bấm "Tạo & sao chép" ở trên để sinh Secret Key mới...'
+            className={`flex-1 font-mono text-xs px-3.5 py-2.5 rounded-xl border outline-none select-all ${
+              emergencyKey 
+                ? 'bg-black/60 border-amber-500/30 text-amber-200 font-bold' 
+                : 'bg-black/30 border-white/5 text-gray-500'
+            }`}
+          />
+          {emergencyKey && (
+            <button 
+              onClick={handleCopyKey}
+              className="bg-amber-400 hover:bg-amber-300 text-black font-bold px-3 py-2.5 rounded-xl transition-colors flex items-center gap-1 text-xs shadow-[0_0_10px_rgba(245,158,11,0.2)]"
+              title="Sao chép Secret Key"
+            >
+              {copiedKey ? <Check size={14} /> : <Copy size={14} />}
+              <span>{copiedKey ? 'Đã chép' : 'Chép Key'}</span>
+            </button>
+          )}
+        </div>
+
+        <div className="flex items-center justify-between text-[11px] text-gray-400 leading-relaxed pt-1">
+          <span>
+            {emergencyKey ? (
+              <>Lưu mã này cẩn thận! Dùng để <strong>đổi pass Administrator/root</strong> hoặc <strong>chèn SSH key</strong> từ xa.</>
+            ) : (
+              <>Mã Secret Key sẽ được tự động sinh ngẫu nhiên và gán vào ô này mỗi khi bạn bấm Tạo lệnh.</>
+            )}
+          </span>
+          {emergencyKey && (
+            <button
+              onClick={handleCopyAll}
+              className="text-xs text-neon-blue hover:text-white hover:underline flex items-center gap-1 shrink-0 ml-2 font-medium"
+            >
+              {copiedAll ? <Check size={12} className="text-green-400" /> : <Copy size={12} />}
+              <span>{copiedAll ? 'Đã chép cả 2' : 'Chép Lệnh + Key'}</span>
+            </button>
+          )}
+        </div>
+      </div>
     </div>
-    <pre className="overflow-x-auto w-full rounded-2xl bg-black/40 p-4 text-xs text-neon-blue whitespace-nowrap">
-      <code>{command}</code>
-    </pre>
-  </div>
-);
+  );
+};
 
 const SettingRow: React.FC<{ entry: SettingEntry, saving: boolean, onSave: (entry: SettingEntry) => Promise<void> }> = ({ entry, saving, onSave }) => {
   const [value, setValue] = useState(entry.value);
@@ -1708,6 +3555,337 @@ const SettingRow: React.FC<{ entry: SettingEntry, saving: boolean, onSave: (entr
   );
 };
 
+interface APIKeyItem {
+  id: number;
+  user_id: number;
+  name: string;
+  key_prefix: string;
+  role: string;
+  scopes: string;
+  last_used_at: string | null;
+  expires_at: string | null;
+  is_active: boolean;
+  created_at: string;
+}
+
+const ApiKeysPage: React.FC<{ token: string; onUnauthorized: () => void }> = ({ token, onUnauthorized }) => {
+  const [keys, setKeys] = useState<APIKeyItem[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [isModalOpen, setIsModalOpen] = useState(false);
+  const [name, setName] = useState('');
+  const [expiresInDays, setExpiresInDays] = useState(0);
+  const [role, setRole] = useState('admin');
+  const [error, setError] = useState('');
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  
+  // Step 2: Display created raw key
+  const [createdKey, setCreatedKey] = useState<string | null>(null);
+  const [hasCopied, setHasCopied] = useState(false);
+
+  const fetchKeys = async () => {
+    try {
+      const res = await fetch('/api/v1/api-keys', {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      if (res.status === 401) return onUnauthorized();
+      if (res.ok) setKeys(await res.json());
+    } catch {} finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchKeys();
+  }, []);
+
+  const handleCreateKey = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (isSubmitting) return;
+    setError('');
+    setIsSubmitting(true);
+    try {
+      const res = await fetch('/api/v1/api-keys', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+        body: JSON.stringify({ name: name.trim(), expires_in_days: expiresInDays, role })
+      });
+      if (res.status === 401) return onUnauthorized();
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Không thể tạo API Key');
+      setCreatedKey(data.key);
+      fetchKeys();
+    } catch (err: any) {
+      setError(err.message);
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const handleDeleteKey = async (id: number) => {
+    if (!window.confirm('Bạn có chắc chắn muốn thu hồi (xóa) API Key này không? Các AI Agent hoặc script đang dùng key này sẽ bị ngắt quyền truy cập ngay lập tức.')) return;
+    try {
+      const res = await fetch(`/api/v1/api-keys/${id}`, {
+        method: 'DELETE',
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      if (res.status === 401) return onUnauthorized();
+      if (res.ok) fetchKeys();
+    } catch {}
+  };
+
+  const handleCloseModal = () => {
+    setIsModalOpen(false);
+    setCreatedKey(null);
+    setName('');
+    setExpiresInDays(0);
+    setError('');
+    setHasCopied(false);
+  };
+
+  const handleCopyKey = () => {
+    if (!createdKey) return;
+    navigator.clipboard.writeText(createdKey);
+    setHasCopied(true);
+    setTimeout(() => setHasCopied(false), 2000);
+  };
+
+  return (
+    <div className="animate-in fade-in slide-in-from-bottom-4 duration-500 space-y-8 pb-20">
+      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
+        <div>
+          <h1 className="text-3xl font-bold text-white flex items-center gap-3">
+            <Key className="text-neon-blue" /> Quản lý API Keys
+          </h1>
+          <p className="text-gray-400 mt-1">Cấp quyền truy cập tự động cho AI Agent, Script, và các dịch vụ bên ngoài</p>
+        </div>
+        <button
+          onClick={() => { setIsModalOpen(true); setCreatedKey(null); }}
+          className="bg-neon-blue text-black font-bold px-6 py-3 rounded-2xl flex items-center gap-2 hover:shadow-[0_0_20px_rgba(0,243,255,0.4)] transition-all"
+        >
+          <Plus size={18} /> Tạo API Key mới
+        </button>
+      </div>
+
+      {/* AI Agent Quickstart Card */}
+      <div className="glass rounded-[32px] p-6 border border-neon-blue/20 bg-neon-blue/5">
+        <h3 className="text-lg font-bold text-neon-blue mb-2 flex items-center gap-2">
+          🤖 Dành cho AI Agent & Tự động hóa
+        </h3>
+        <p className="text-sm text-gray-300 leading-relaxed mb-4">
+          Hệ thống cung cấp sẵn các Endpoint tự mô tả để LLM (Claude, ChatGPT, Gemini, LangChain, MCP) có thể đọc hiểu cách gọi API tự động:
+        </p>
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-3 text-xs font-mono">
+          <a
+            href="/api/v1/ai/docs"
+            target="_blank"
+            rel="noreferrer"
+            className="p-3 bg-white/5 hover:bg-white/10 border border-white/10 rounded-xl flex items-center justify-between text-gray-200 transition-colors"
+          >
+            <span>📄 /api/v1/ai/docs (Markdown)</span>
+            <ChevronRight size={14} className="text-neon-blue" />
+          </a>
+          <a
+            href="/llms.txt"
+            target="_blank"
+            rel="noreferrer"
+            className="p-3 bg-white/5 hover:bg-white/10 border border-white/10 rounded-xl flex items-center justify-between text-gray-200 transition-colors"
+          >
+            <span>📜 /llms.txt (LLM Prompt)</span>
+            <ChevronRight size={14} className="text-neon-blue" />
+          </a>
+          <a
+            href="/api/v1/openapi.json"
+            target="_blank"
+            rel="noreferrer"
+            className="p-3 bg-white/5 hover:bg-white/10 border border-white/10 rounded-xl flex items-center justify-between text-gray-200 transition-colors"
+          >
+            <span>⚙️ /api/v1/openapi.json (OpenAPI 3.0)</span>
+            <ChevronRight size={14} className="text-neon-blue" />
+          </a>
+        </div>
+        <div className="mt-4 p-3 bg-black/40 rounded-xl border border-white/5 text-xs font-mono text-gray-400">
+          <span className="text-gray-500"># Gọi kiểm tra trạng thái:</span><br/>
+          curl -H "X-API-Key: &lt;YOUR_API_KEY&gt;" {window.location.origin}/api/v1/ai/ping
+        </div>
+      </div>
+
+      {/* API Keys Table */}
+      <div className="glass rounded-[32px] overflow-hidden border border-white/10">
+        {loading ? (
+          <div className="p-8 text-center text-gray-500 flex items-center justify-center gap-2">
+            <Loader2 className="animate-spin" size={20} /> Đang tải danh sách API Keys...
+          </div>
+        ) : keys.length === 0 ? (
+          <div className="p-12 text-center text-gray-500">
+            <Key size={40} className="mx-auto mb-3 opacity-30 text-neon-blue" />
+            <p>Chưa có API Key nào được tạo.</p>
+            <p className="text-xs text-gray-600 mt-1">Bấm "Tạo API Key mới" để bắt đầu tích hợp với AI Agent hoặc Script.</p>
+          </div>
+        ) : (
+          <table className="w-full text-left">
+            <thead className="bg-white/5 text-gray-400 text-xs uppercase">
+              <tr>
+                <th className="px-6 py-4">Tên Key</th>
+                <th>Tiền tố (Prefix)</th>
+                <th>Vai trò</th>
+                <th>Phạm vi</th>
+                <th>Lần dùng cuối</th>
+                <th>Hết hạn</th>
+                <th className="text-right px-6">Thao tác</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-white/5 text-gray-300">
+              {keys.map(k => (
+                <tr key={k.id} className="border-b border-white/5 hover:bg-white/[0.02]">
+                  <td className="px-6 py-4 font-bold text-white flex items-center gap-2">
+                    <Key size={14} className="text-neon-blue" />
+                    {k.name}
+                  </td>
+                  <td className="font-mono text-xs text-neon-blue">
+                    <code>{k.key_prefix}...</code>
+                  </td>
+                  <td>
+                    <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider ${k.role === 'admin' ? 'bg-red-500/10 text-red-400 border border-red-500/20' : 'bg-blue-500/10 text-blue-400 border border-blue-500/20'}`}>
+                      {k.role}
+                    </span>
+                  </td>
+                  <td className="text-xs text-gray-400 font-mono">{k.scopes || 'full_access'}</td>
+                  <td className="text-xs text-gray-400 font-mono">
+                    {k.last_used_at ? new Date(k.last_used_at).toLocaleString() : <span className="italic text-gray-600">Chưa sử dụng</span>}
+                  </td>
+                  <td className="text-xs text-gray-400 font-mono">
+                    {k.expires_at ? new Date(k.expires_at).toLocaleDateString() : <span className="text-green-400">Vĩnh viễn</span>}
+                  </td>
+                  <td className="text-right px-6">
+                    <button
+                      onClick={() => handleDeleteKey(k.id)}
+                      className="p-2 text-gray-500 hover:text-red-400 transition-colors"
+                      title="Thu hồi API Key"
+                    >
+                      <Trash2 size={16} />
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
+
+      {/* Modal Tạo API Key */}
+      {isModalOpen && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/80 backdrop-blur-md p-4">
+          <div className="glass max-w-md w-full p-8 rounded-[32px] border border-white/10">
+            {!createdKey ? (
+              <>
+                <h2 className="text-2xl font-bold mb-6 text-white flex items-center gap-2">
+                  <Key className="text-neon-blue" /> Tạo API Key mới
+                </h2>
+                <form onSubmit={handleCreateKey} className="space-y-4">
+                  <div>
+                    <label className="text-xs text-gray-500 font-bold uppercase mb-1 block">Tên nhận diện (Mô tả)</label>
+                    <input
+                      type="text"
+                      placeholder="Ví dụ: AI Agent Orchestrator, CLI Deploy Tool..."
+                      value={name}
+                      onChange={e => setName(e.target.value)}
+                      required
+                      className="w-full bg-white/5 border border-white/10 rounded-xl p-3 text-white outline-none focus:border-neon-blue/50 text-sm"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-xs text-gray-500 font-bold uppercase mb-1 block">Thời hạn hiệu lực</label>
+                    <select
+                      value={expiresInDays}
+                      onChange={e => setExpiresInDays(parseInt(e.target.value))}
+                      className="w-full bg-white/5 border border-white/10 rounded-xl p-3 text-white outline-none text-sm"
+                    >
+                      <option value={0}>Không bao giờ hết hạn (Khuyên dùng cho AI Agent)</option>
+                      <option value={30}>30 ngày</option>
+                      <option value={90}>90 ngày</option>
+                      <option value={365}>1 năm</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="text-xs text-gray-500 font-bold uppercase mb-1 block">Quyền hạn (Role)</label>
+                    <select
+                      value={role}
+                      onChange={e => setRole(e.target.value)}
+                      className="w-full bg-white/5 border border-white/10 rounded-xl p-3 text-white outline-none text-sm"
+                    >
+                      <option value="admin">Quản trị viên (Toàn quyền quản lý proxy & server)</option>
+                      <option value="user">Người dùng thông thường</option>
+                    </select>
+                  </div>
+
+                  {error && <p className="text-red-400 text-sm">{error}</p>}
+
+                  <div className="pt-4 flex gap-2">
+                    <button
+                      type="submit"
+                      disabled={isSubmitting}
+                      className={`flex-1 bg-neon-blue text-black font-bold py-3 rounded-xl transition-all flex items-center justify-center gap-2 ${isSubmitting ? 'opacity-50 cursor-not-allowed' : 'hover:shadow-[0_0_20px_rgba(0,243,255,0.4)]'}`}
+                    >
+                      {isSubmitting && <Loader2 className="animate-spin" size={16} />}
+                      {isSubmitting ? 'Đang tạo...' : 'Tạo Key'}
+                    </button>
+                    <button
+                      type="button"
+                      disabled={isSubmitting}
+                      onClick={handleCloseModal}
+                      className="flex-1 bg-white/5 text-gray-400 hover:text-white py-3 rounded-xl transition-colors"
+                    >
+                      Hủy bỏ
+                    </button>
+                  </div>
+                </form>
+              </>
+            ) : (
+              <div className="space-y-6">
+                <div className="flex items-center gap-3 text-green-400">
+                  <CheckCircle2 size={24} />
+                  <h2 className="text-xl font-bold text-white">API Key đã được tạo!</h2>
+                </div>
+
+                <div className="p-4 bg-amber-500/10 border border-amber-500/20 rounded-2xl text-xs text-amber-300 leading-relaxed">
+                  ⚠️ <strong>Quan trọng:</strong> Hãy sao chép và lưu trữ API Key này ngay bây giờ. Vì lý do bảo mật, bạn sẽ <strong>không thể xem lại</strong> khóa này một khi cửa sổ đóng lại!
+                </div>
+
+                <div>
+                  <label className="text-xs text-gray-400 font-bold uppercase mb-1 block">API Key của bạn:</label>
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="text"
+                      readOnly
+                      value={createdKey}
+                      className="w-full bg-white/5 border border-white/10 rounded-xl p-3 text-neon-blue font-mono text-xs outline-none select-all"
+                    />
+                    <button
+                      onClick={handleCopyKey}
+                      className={`px-4 py-3 rounded-xl font-bold text-sm flex items-center gap-1.5 transition-all ${hasCopied ? 'bg-green-500 text-black' : 'bg-neon-blue text-black hover:shadow-[0_0_15px_rgba(0,243,255,0.4)]'}`}
+                    >
+                      {hasCopied ? <Check size={16} /> : <Copy size={16} />}
+                      <span>{hasCopied ? 'Đã chép' : 'Sao chép'}</span>
+                    </button>
+                  </div>
+                </div>
+
+                <div className="pt-2">
+                  <button
+                    onClick={handleCloseModal}
+                    className="w-full bg-white/10 text-white font-bold py-3 rounded-xl hover:bg-white/20 transition-all"
+                  >
+                    Tôi đã lưu khóa này an toàn
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
 
 const DocsPage: React.FC = () => (
   <div className="animate-in fade-in slide-in-from-bottom-4 duration-500 space-y-8 pb-20">
@@ -1742,7 +3920,7 @@ const DocsPage: React.FC = () => (
           </div>
           <div>
             <p className="font-bold text-white mb-1">TCP/UDP Proxy:</p>
-            <p>Cần nhập <span className="text-white font-bold">Cổng Công khai</span> (từ 10000 - 20000). Đây là cổng bạn sẽ dùng để truy cập dịch vụ từ xa.</p>
+            <p>Nhập <span className="text-white font-bold">Cổng Công khai (Remote Port)</span> tùy ý mà bạn muốn mở trên máy chủ (hệ thống không giới hạn dải cổng, bạn có thể chọn bất kỳ cổng nào từ 1 - 65535 chưa bị trùng). Đây là cổng bạn sẽ dùng để truy cập dịch vụ từ xa.</p>
           </div>
         </div>
       </div>

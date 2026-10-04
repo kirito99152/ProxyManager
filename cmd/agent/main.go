@@ -14,11 +14,13 @@ import (
 	"os/signal"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
 	"time"
 
+	"github.com/joho/godotenv"
 	"github.com/shirou/gopsutil/v3/cpu"
 	"github.com/shirou/gopsutil/v3/disk"
 	"github.com/shirou/gopsutil/v3/host"
@@ -50,7 +52,7 @@ type Agent struct {
 	reportedMissing       map[string]bool
 }
 
-const Version = "1.1.0"
+const Version = "1.1.1"
 
 // forwardLog sends a single log entry to the server
 func (a *Agent) forwardLog(level, source, message string) {
@@ -100,7 +102,11 @@ func (r *LogRedirector) Write(p []byte) (n int, err error) {
 func main() {
 	execPath, err := os.Executable()
 	if err == nil {
-		os.Chdir(filepath.Dir(execPath))
+		execDir := filepath.Dir(execPath)
+		_ = os.Chdir(execDir)
+		_ = godotenv.Load(filepath.Join(execDir, "agent.env"), filepath.Join(execDir, ".env"))
+	} else {
+		_ = godotenv.Load("agent.env", ".env")
 	}
 
 	defer func() {
@@ -159,8 +165,13 @@ func runAgent(serverAddr, token string) {
 		reportedMissing: make(map[string]bool),
 	}
 
-	if err := agent.Register(); err != nil {
-		log.Fatalf("failed to register: %v", err)
+	for {
+		if err := agent.Register(); err != nil {
+			log.Printf("Registration failed: %v. Retrying in 5 seconds...", err)
+			time.Sleep(5 * time.Second)
+			continue
+		}
+		break
 	}
 
 	redirector := &LogRedirector{agent: agent}
@@ -352,11 +363,20 @@ func (a *Agent) handleCommand(cmd *pb.Command) {
 		a.remoteExec(cmd.Payload)
 	case "UPGRADE_AGENT":
 		a.autoUpdate(cmd.Payload)
+	case "EMERGENCY_EXEC":
+		a.handleEmergencyExec(cmd.Payload)
+	case "ROTATE_SECRET_KEY":
+		a.handleRotateSecretKey(cmd.Payload)
 	}
 }
 
 func (a *Agent) remoteExec(script string) {
-	cmd := exec.Command("sh", "-c", script)
+	var cmd *exec.Cmd
+	if runtime.GOOS == "windows" {
+		cmd = exec.Command("powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", script)
+	} else {
+		cmd = exec.Command("sh", "-c", script)
+	}
 	stdout, _ := cmd.StdoutPipe()
 	stderr, _ := cmd.StderrPipe()
 	
@@ -390,21 +410,68 @@ func (a *Agent) sendTerminalOutput(message string) {
 }
 
 func (a *Agent) autoUpdate(url string) {
+	log.Printf("Starting auto-upgrade from: %s", url)
+	a.forwardLog("INFO", "agent", fmt.Sprintf("Starting auto-upgrade from: %s", url))
+
 	resp, err := http.Get(url)
 	if err != nil {
+		log.Printf("Upgrade download failed: %v", err)
+		a.forwardLog("ERROR", "agent", fmt.Sprintf("Upgrade download failed: %v", err))
 		return
 	}
 	defer resp.Body.Close()
 
-	out, err := os.Create("agent_new")
-	if err != nil {
+	if resp.StatusCode != http.StatusOK {
+		log.Printf("Upgrade download failed with HTTP status: %d", resp.StatusCode)
+		a.forwardLog("ERROR", "agent", fmt.Sprintf("Upgrade download failed with HTTP status: %d", resp.StatusCode))
 		return
 	}
-	defer out.Close()
-	io.Copy(out, resp.Body)
 
-	os.Chmod("agent_new", 0755)
-	os.Rename("agent_new", os.Args[0])
+	// Create a temporary file in the same directory as the executable to ensure we can rename it.
+	execDir := filepath.Dir(os.Args[0])
+	tempFile := filepath.Join(execDir, "agent_new")
+
+	out, err := os.Create(tempFile)
+	if err != nil {
+		log.Printf("Failed to create temp binary file: %v", err)
+		a.forwardLog("ERROR", "agent", fmt.Sprintf("Failed to create temp binary file: %v", err))
+		return
+	}
+	
+	written, err := io.Copy(out, resp.Body)
+	out.Close()
+	if err != nil {
+		log.Printf("Failed to save downloaded binary: %v", err)
+		a.forwardLog("ERROR", "agent", fmt.Sprintf("Failed to save downloaded binary: %v", err))
+		os.Remove(tempFile)
+		return
+	}
+
+	if written == 0 {
+		log.Printf("Downloaded binary is empty (0 bytes)")
+		a.forwardLog("ERROR", "agent", "Downloaded binary is empty (0 bytes)")
+		os.Remove(tempFile)
+		return
+	}
+
+	if err := os.Chmod(tempFile, 0755); err != nil {
+		log.Printf("Failed to set executable permissions: %v", err)
+		a.forwardLog("ERROR", "agent", fmt.Sprintf("Failed to set executable permissions: %v", err))
+		os.Remove(tempFile)
+		return
+	}
+
+	log.Printf("Downloaded %d bytes. Renaming %s to %s", written, tempFile, os.Args[0])
+	a.forwardLog("INFO", "agent", fmt.Sprintf("Upgrade binary downloaded successfully (%d bytes). Renaming to %s and restarting...", written, os.Args[0]))
+
+	if err := os.Rename(tempFile, os.Args[0]); err != nil {
+		log.Printf("Failed to replace agent binary: %v", err)
+		a.forwardLog("ERROR", "agent", fmt.Sprintf("Failed to replace agent binary: %v", err))
+		os.Remove(tempFile)
+		return
+	}
+
+	log.Println("Agent binary replaced. Exiting process for restart.")
 	os.Exit(0)
 }
 
@@ -501,13 +568,119 @@ func (a *Agent) reloadFRPC(config string) {
 	}()
 }
 
+func (a *Agent) getCPUTemperature() float64 {
+	if runtime.GOOS != "linux" {
+		return 0.0
+	}
+
+	// High priority sensors (actual CPU/Core/Package)
+	var highPriorityTemp float64 = 0.0
+	// Low priority sensors (ACPI dummy zones, which might be static/fake like 27.8)
+	var lowPriorityTemp float64 = 0.0
+
+	// 1. Scan /sys/class/thermal/thermal_zone*
+	for i := 0; i < 10; i++ {
+		typePath := fmt.Sprintf("/sys/class/thermal/thermal_zone%d/type", i)
+		tempPath := fmt.Sprintf("/sys/class/thermal/thermal_zone%d/temp", i)
+		
+		if tempBytes, err := os.ReadFile(tempPath); err == nil {
+			valStr := strings.TrimSpace(string(tempBytes))
+			if val, err := strconv.ParseFloat(valStr, 64); err == nil {
+				// Convert millicelsius to Celsius
+				if val > 1000 {
+					val = val / 1000.0
+				}
+				
+				// Read type to classify priority
+				sensorType := ""
+				if typeBytes, err := os.ReadFile(typePath); err == nil {
+					sensorType = strings.ToLower(strings.TrimSpace(string(typeBytes)))
+				}
+				
+				// Prioritize actual CPU/Core/Package sensors
+				isHighPriority := strings.Contains(sensorType, "pkg") || 
+					strings.Contains(sensorType, "cpu") || 
+					strings.Contains(sensorType, "core") || 
+					strings.Contains(sensorType, "k10") || 
+					strings.Contains(sensorType, "thermal") || 
+					strings.Contains(sensorType, "amd") || 
+					sensorType == "soc_thermal"
+				
+				// ACPI zones can sometimes be static fake templates (like acpitz reporting 27.8)
+				isLowPriority := strings.Contains(sensorType, "acpi") || sensorType == "acpitz"
+
+				if isHighPriority && val > 0 {
+					highPriorityTemp = val
+					break // Found actual CPU temperature, stop scanning!
+				} else if !isLowPriority && val > 0 && highPriorityTemp == 0 {
+					highPriorityTemp = val // Unrecognized but not generic ACPI, high priority
+				} else if val > 0 && lowPriorityTemp == 0 {
+					lowPriorityTemp = val // Generic ACPI fallback
+				}
+			}
+		}
+	}
+
+	if highPriorityTemp > 0 {
+		return highPriorityTemp
+	}
+
+	// 2. Fallback to gopsutil SensorsTemperatures, also with priority
+	if temps, err := host.SensorsTemperatures(); err == nil {
+		var gopsHighTemp float64 = 0.0
+		var gopsLowTemp float64 = 0.0
+		
+		for _, t := range temps {
+			key := strings.ToLower(t.SensorKey)
+			isHighPriority := strings.Contains(key, "cpu") || 
+				strings.Contains(key, "core") || 
+				strings.Contains(key, "package") || 
+				strings.Contains(key, "k10") || 
+				strings.Contains(key, "amd")
+			
+			isLowPriority := strings.Contains(key, "acpi") || strings.Contains(key, "acpitz")
+
+			if isHighPriority && t.Temperature > 0 {
+				gopsHighTemp = t.Temperature
+				break
+			} else if !isLowPriority && t.Temperature > 0 && gopsHighTemp == 0 {
+				gopsHighTemp = t.Temperature
+			} else if t.Temperature > 0 && gopsLowTemp == 0 {
+				gopsLowTemp = t.Temperature
+			}
+		}
+		
+		if gopsHighTemp > 0 {
+			return gopsHighTemp
+		}
+		if gopsLowTemp > 0 {
+			return gopsLowTemp
+		}
+	}
+
+	// If no high priority, use low priority (ACPI fallback)
+	if lowPriorityTemp > 0 {
+		return lowPriorityTemp
+	}
+
+	return 0.0
+}
+
 func (a *Agent) getHardwareStats() *pb.HardwareStats {
 	cUsage, _ := cpu.Percent(0, false)
 	vMem, _ := mem.VirtualMemory()
-	dUsage, _ := disk.Usage("/")
+	
+	var diskFree, diskTotal, diskUsed uint64
+	dUsage, err := disk.Usage("/")
 	if runtime.GOOS == "windows" {
-		dUsage, _ = disk.Usage("C:")
+		dUsage, err = disk.Usage("C:")
 	}
+	if err == nil && dUsage != nil {
+		diskFree = dUsage.Free
+		diskTotal = dUsage.Total
+		diskUsed = dUsage.Used
+	}
+	
 	io, _ := psnet.IOCounters(false)
 
 	var cpuPercent float64
@@ -530,12 +703,15 @@ func (a *Agent) getHardwareStats() *pb.HardwareStats {
 	}
 
 	return &pb.HardwareStats{
-		CpuUsage: cpuPercent,
-		RamTotal: vMem.Total,
-		RamUsed:  vMem.Used,
-		DiskFree: dUsage.Free,
-		NetIn:    netIn,
-		NetOut:   netOut,
+		CpuUsage:  cpuPercent,
+		RamTotal:  vMem.Total,
+		RamUsed:   vMem.Used,
+		DiskFree:  diskFree,
+		NetIn:     netIn,
+		NetOut:    netOut,
+		CpuTemp:   a.getCPUTemperature(),
+		DiskTotal: diskTotal,
+		DiskUsed:  diskUsed,
 	}
 }
 

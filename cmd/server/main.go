@@ -12,6 +12,7 @@ import (
 	"github.com/kirito99152/ProxyManager/internal/dashboard"
 	"github.com/kirito99152/ProxyManager/internal/db"
 	"github.com/kirito99152/ProxyManager/internal/hub"
+	"github.com/kirito99152/ProxyManager/internal/mailer"
 	"google.golang.org/grpc"
 )
 
@@ -27,11 +28,16 @@ func main() {
 		log.Fatalf("Failed to initialize database: %v", err)
 	}
 
+	// Initialize Mailer and Alert Manager
+	mailService := mailer.NewMailer()
+	alertManager := mailer.NewAlertManager(database, mailService)
+	log.Printf("Initialized Alert Manager with mail server %s:%s (From: %s)", mailService.Host, mailService.Port, mailService.From)
+
 	// Start WebSocket Hub
 	go hub.Hub.Run()
 
-	// Start Offline Agent Monitor
-	go dashboard.StartAgentMonitor(database)
+	// Start Offline Agent Monitor with Alert Manager
+	go dashboard.StartAgentMonitor(database, alertManager)
 
 	// Start FRPS Status Monitor (Tunnel Detection)
 	go dashboard.StartFrpsMonitor(database)
@@ -40,13 +46,13 @@ func main() {
 	go db.StartRetentionPolicy(database)
 
 	// Create a single API handler to be shared
-	apiHandler := api.NewHandler(database)
+	apiHandler := api.NewHandler(database, alertManager)
 
 	// Start gRPC Server in a goroutine
 	go startGRPCServer(apiHandler)
 
-	// Start Dashboard REST API, passing the API handler
-	startDashboardServer(database, apiHandler)
+	// Start Dashboard REST API, passing the API handler and alert manager
+	startDashboardServer(database, apiHandler, alertManager)
 }
 
 func startGRPCServer(apiHandler *api.Handler) {
@@ -69,7 +75,7 @@ func startGRPCServer(apiHandler *api.Handler) {
 	}
 }
 
-func startDashboardServer(database *db.DB, apiHandler *api.Handler) {
+func startDashboardServer(database *db.DB, apiHandler *api.Handler, alertManager *mailer.AlertManager) {
 	r := gin.Default()
 
 	// CORS Middleware
@@ -86,7 +92,7 @@ func startDashboardServer(database *db.DB, apiHandler *api.Handler) {
 		c.Next()
 	})
 
-	dashboard.SetupRoutes(r, database, apiHandler)
+	dashboard.SetupRoutes(r, database, apiHandler, alertManager)
 
 	// Serve Static Files
 	r.Static("/assets", "dashboard/dist/assets")
